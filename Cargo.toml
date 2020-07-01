@@ -1,5 +1,5 @@
 [package]
-name = "damnitisp"
+name = "durnitisp"
 version = "0.1.0"
 authors = ["Jeremy Wall <jeremy@marzhillstudios.com>"]
 edition = "2018"
@@ -8,3 +8,5 @@ edition = "2018"
 
 [dependencies]
 gflags = "^0.3"
+nursery = "^0.0.1"
+prometheus = "^0.9.0"
