@@ -9,6 +9,7 @@ use nursery::thread;
 use nursery::{Nursery, Waitable};
 use prometheus;
 use prometheus::{CounterVec, Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
+use tiny_http;
 
 gflags::define! {
     /// Print this help text.
@@ -179,17 +180,26 @@ fn main() {
         parent.schedule(Box::new(connect_thread));
     }
     let render_thread = thread::Pending::new(move || {
+        let server = tiny_http::Server::http("localhost:8080").unwrap();
         loop {
-            let mut buffer = vec![];
-            // Gather the metrics.
-            let encoder = TextEncoder::new();
-            let metric_families = r.gather();
-            encoder.encode(&metric_families, &mut buffer).unwrap();
+            eprintln!("Waiting for request");
+            match server.recv() {
+                Ok(req) => {
+                    let mut buffer = vec![];
+                    // Gather the metrics.
+                    let encoder = TextEncoder::new();
+                    let metric_families = r.gather();
+                    encoder.encode(&metric_families, &mut buffer).unwrap();
 
-            // Output to the standard output.
-            println!("{}", String::from_utf8(buffer).unwrap());
-            // Then we wait for some period of time.
-            std::thread::sleep(std::time::Duration::from_secs(DELAYSECS.flag))
+                    let response = tiny_http::Response::from_data(buffer).with_status_code(200);
+                    if let Err(e) = req.respond(response) {
+                        eprintln!("Error responding to request {}", e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Invalid http request! {}", e);
+                }
+            }
         }
     });
     parent.schedule(Box::new(render_thread));
