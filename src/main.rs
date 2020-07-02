@@ -23,7 +23,7 @@ gflags::define! {
 
 gflags::define! {
     /// Port to listen on for exporting variables prometheus style.
-    --listenPort: u32 = 0
+    --listenHost = "0.0.0.0:8080"
 }
 
 gflags::define! {
@@ -180,7 +180,7 @@ fn main() {
         parent.schedule(Box::new(connect_thread));
     }
     let render_thread = thread::Pending::new(move || {
-        let server = tiny_http::Server::http("localhost:8080").unwrap();
+        let server = tiny_http::Server::http(LISTENHOST.flag).unwrap();
         loop {
             eprintln!("Waiting for request");
             match server.recv() {
