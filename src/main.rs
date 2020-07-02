@@ -7,7 +7,6 @@ use std::time::SystemTime;
 use gflags;
 use nursery::thread;
 use nursery::{Nursery, Waitable};
-#[macro_use]
 use prometheus;
 use prometheus::{CounterVec, Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
 
@@ -36,7 +35,7 @@ gflags::define! {
     --stunRecvTimeoutSecs: u64 = 5
 }
 
-const stun_payload: [u8; 20] = [
+const STUN_PAYLOAD: [u8; 20] = [
     0, 1, // Binding request
     0, 0, // Message length
     0x21, 0x12, 0xa4, 0x42, // magic
@@ -75,7 +74,7 @@ fn attempt_stun_connect(addr: SocketAddr) -> Result<SystemTime, ConnectError> {
     local_socket.set_read_timeout(Some(std::time::Duration::from_secs(
         STUNRECVTIMEOUTSECS.flag,
     )))?;
-    let sent = local_socket.send(&stun_payload)?;
+    let _sent = local_socket.send(&STUN_PAYLOAD)?;
     // TODO what if we didn't send the whole packet?
     let mut buf = [0 as u8; 1024];
     let rcvd = local_socket.recv(&mut buf)?;
@@ -96,7 +95,12 @@ fn main() {
     let mut stun_servers = gflags::parse();
 
     if HELP.flag {
-        // TODO print better help than this.
+        println!("durnitisp <options> <list of hostname:port>");
+        println!("");
+        println!("The hostname and port are expected to be for a valid stun server.");
+        println!("You can put as many of them as you want after the options.");
+        println!("");
+        println!("FLAGS:");
         gflags::print_help_and_exit(0);
     }
     if stun_servers.is_empty() {
@@ -112,7 +116,6 @@ fn main() {
     );
     // Create a Registry and register metrics.
     let r = Registry::new();
-    //r.register(Box::new(counter.clone())).unwrap();
     let stun_counter_vec = CounterVec::new(counter_opts, &["result", "domain"]).unwrap();
     r.register(Box::new(stun_counter_vec.clone()))
         .expect("Failed to register stun connection counter");
@@ -122,7 +125,6 @@ fn main() {
     let socket_addrs = resolve_addrs(&stun_servers).unwrap();
     let stun_servers = Arc::new(stun_servers);
 
-    // TODO We need some accounting here
     // first we attempt connections to each server.
     let mut parent = Nursery::new();
     for (i, s) in socket_addrs.iter().enumerate() {
