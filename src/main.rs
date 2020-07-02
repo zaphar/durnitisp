@@ -133,10 +133,10 @@ fn main() {
         let stun_counter_vec_copy = stun_counter_vec.clone();
         let stun_latency_vec_copy = stun_latency_vec.clone();
         let s = s.clone();
-        let now = SystemTime::now();
         let domain_name = *stun_servers_copy.get(i).unwrap();
         let connect_thread = thread::Pending::new(move || {
             loop {
+                let now = SystemTime::now();
                 eprintln!("Attempting to connect to {}", domain_name);
                 match attempt_stun_connect(s) {
                     Ok(finish_time) => {
