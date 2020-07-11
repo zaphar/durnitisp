@@ -27,11 +27,6 @@ gflags::define! {
 }
 
 gflags::define! {
-    /// Retry dns infinitenly until we resolve.
-    --dnsRetryInfinite = false
-}
-
-gflags::define! {
     /// Read timeout for the stun server udp receive
     --stunRecvTimeoutSecs: u64 = 5
 }
