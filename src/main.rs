@@ -58,7 +58,10 @@ fn resolve_addrs(servers: &Vec<&str>) -> io::Result<Vec<SocketAddr>> {
     let mut results = Vec::new();
     for name in servers.iter().cloned() {
         // TODO for resolution errors return a more valid error with the domain name.
-        results.extend(name.to_socket_addrs()?);
+        match name.to_socket_addrs() {
+            Ok(addr) => results.extend(addr),
+            Err(e) => eprintln!("Failed to resolve {} with error {}", name, e),
+        }
     }
     return Ok(results);
 }
