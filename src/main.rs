@@ -25,6 +25,8 @@ use prometheus;
 use prometheus::{CounterVec, Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
 use tiny_http;
 
+use log::{debug, error, info};
+
 gflags::define! {
     /// Print this help text.
     -h, --help = false
@@ -43,6 +45,11 @@ gflags::define! {
 gflags::define! {
     /// Read timeout for the stun server udp receive
     --stunRecvTimeoutSecs: u64 = 5
+}
+
+gflags::define! {
+    /// Enable debug logging
+    --debug = false
 }
 
 const STUN_PAYLOAD: [u8; 20] = [
@@ -74,7 +81,7 @@ fn resolve_addrs(servers: &Vec<&str>) -> io::Result<Vec<SocketAddr>> {
         // TODO for resolution errors return a more valid error with the domain name.
         match name.to_socket_addrs() {
             Ok(addr) => results.extend(addr),
-            Err(e) => eprintln!("Failed to resolve {} with error {}", name, e),
+            Err(e) => info!("Failed to resolve {} with error {}", name, e),
         }
     }
     return Ok(results);
@@ -97,7 +104,7 @@ fn attempt_stun_connect(addr: SocketAddr) -> Result<SystemTime, ConnectError> {
     Ok(SystemTime::now())
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let default_stun_servers: Vec<&'static str> = vec![
         "stun.l.google.com:19302",
         "stun.ekiga.net:3478",
@@ -116,6 +123,13 @@ fn main() {
         println!("FLAGS:");
         gflags::print_help_and_exit(0);
     }
+
+    let level = if DEBUG.flag { 3 } else { 2 };
+    stderrlog::new()
+        .verbosity(level)
+        .timestamp(stderrlog::Timestamp::Millisecond)
+        .init()?;
+
     if stun_servers.is_empty() {
         stun_servers = default_stun_servers;
     }
@@ -147,12 +161,13 @@ fn main() {
         let s = s.clone();
         let domain_name = *stun_servers_copy.get(i).unwrap();
         let connect_thread = thread::Pending::new(move || {
+            debug!("started thread for {}", domain_name);
             loop {
                 let now = SystemTime::now();
-                eprintln!("Attempting to connect to {}", domain_name);
+                info!("Attempting to connect to {}", domain_name);
                 match attempt_stun_connect(s) {
                     Ok(finish_time) => {
-                        eprintln!("Success! connecting to {}", domain_name);
+                        info!("Success! connecting to {}", domain_name);
                         stun_counter_vec_copy
                             .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
                             .inc();
@@ -162,7 +177,7 @@ fn main() {
                             .set(finish_time.duration_since(now).unwrap().as_millis() as i64);
                     }
                     Err(ConnectError::Timeout(finish_time)) => {
-                        eprintln!(
+                        info!(
                             "Stun connection to {} timedout after {} millis",
                             domain_name,
                             finish_time.duration_since(now).unwrap().as_millis()
@@ -172,13 +187,13 @@ fn main() {
                             .inc();
                     }
                     Err(ConnectError::Err(e)) => {
-                        eprintln!("Error connecting to {}: {}", domain_name, e);
+                        error!("Error connecting to {}: {}", domain_name, e);
                         stun_counter_vec_copy
                             .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
                             .inc();
                     }
                     Err(ConnectError::Incomplete) => {
-                        eprintln!("Connection to {} was incomplete", domain_name);
+                        error!("Connection to {} was incomplete", domain_name);
                         stun_counter_vec_copy
                             .with(&prometheus::labels! {"result" => "incomplete", "domain" => domain_name})
                             .inc();
@@ -192,9 +207,10 @@ fn main() {
         parent.schedule(Box::new(connect_thread));
     }
     let render_thread = thread::Pending::new(move || {
+        debug!("attempting to start server on {}", LISTENHOST.flag);
         let server = tiny_http::Server::http(LISTENHOST.flag).unwrap();
         loop {
-            eprintln!("Waiting for request");
+            info!("Waiting for request");
             match server.recv() {
                 Ok(req) => {
                     let mut buffer = vec![];
@@ -205,11 +221,11 @@ fn main() {
 
                     let response = tiny_http::Response::from_data(buffer).with_status_code(200);
                     if let Err(e) = req.respond(response) {
-                        eprintln!("Error responding to request {}", e);
+                        info!("Error responding to request {}", e);
                     }
                 }
                 Err(e) => {
-                    eprintln!("Invalid http request! {}", e);
+                    info!("Invalid http request! {}", e);
                 }
             }
         }
@@ -217,4 +233,5 @@ fn main() {
     parent.schedule(Box::new(render_thread));
     // Blocks forever
     parent.wait();
+    Ok(())
 }
