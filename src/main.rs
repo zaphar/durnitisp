@@ -25,7 +25,7 @@ use prometheus;
 use prometheus::{CounterVec, Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
 use tiny_http;
 
-use log::{error, info};
+use log::{debug, error, info};
 
 gflags::define! {
     /// Print this help text.
@@ -45,6 +45,11 @@ gflags::define! {
 gflags::define! {
     /// Read timeout for the stun server udp receive
     --stunRecvTimeoutSecs: u64 = 5
+}
+
+gflags::define! {
+    /// Enable debug logging
+    --debug = false
 }
 
 const STUN_PAYLOAD: [u8; 20] = [
@@ -119,7 +124,8 @@ fn main() -> anyhow::Result<()> {
         gflags::print_help_and_exit(0);
     }
 
-    stderrlog::new().verbosity(2).init()?;
+    let level = if DEBUG.flag { 3 } else { 2 };
+    stderrlog::new().verbosity(level).init()?;
 
     if stun_servers.is_empty() {
         stun_servers = default_stun_servers;
@@ -152,6 +158,7 @@ fn main() -> anyhow::Result<()> {
         let s = s.clone();
         let domain_name = *stun_servers_copy.get(i).unwrap();
         let connect_thread = thread::Pending::new(move || {
+            debug!("started thread for {}", domain_name);
             loop {
                 let now = SystemTime::now();
                 info!("Attempting to connect to {}", domain_name);
@@ -197,6 +204,7 @@ fn main() -> anyhow::Result<()> {
         parent.schedule(Box::new(connect_thread));
     }
     let render_thread = thread::Pending::new(move || {
+        debug!("attempting to start server on {}", LISTENHOST.flag);
         let server = tiny_http::Server::http(LISTENHOST.flag).unwrap();
         loop {
             info!("Waiting for request");
