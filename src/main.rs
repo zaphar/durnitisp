@@ -16,6 +16,7 @@ use std::convert::From;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::time::SystemTime;
 
 use gflags;
@@ -139,6 +140,9 @@ fn main() -> anyhow::Result<()> {
         "stun_attempt_latency_ms",
         "Latency guage in millis per stun domain.",
     );
+
+    let stop_signal = Arc::new(RwLock::new(false));
+
     // Create a Registry and register metrics.
     let r = Registry::new();
     let stun_counter_vec = CounterVec::new(counter_opts, &["result", "domain"]).unwrap();
@@ -158,9 +162,17 @@ fn main() -> anyhow::Result<()> {
         let stun_latency_vec_copy = stun_latency_vec.clone();
         let s = s.clone();
         let domain_name = *stun_servers_copy.get(i).unwrap();
+        let stop_signal = stop_signal.clone();
         let connect_thread = thread::Pending::new(move || {
             debug!("started thread for {}", domain_name);
             loop {
+                {
+                    // Limit the scope of this lock
+                    if *stop_signal.read().unwrap() {
+                        info!("Stopping thread for {}", domain_name);
+                        return;
+                    }
+                }
                 let now = SystemTime::now();
                 info!("Attempting to connect to {}", domain_name);
                 match attempt_stun_connect(s) {
@@ -204,9 +216,19 @@ fn main() -> anyhow::Result<()> {
         });
         parent.schedule(Box::new(connect_thread));
     }
+    let stop_signal = stop_signal.clone();
     let render_thread = thread::Pending::new(move || {
         debug!("attempting to start server on {}", LISTENHOST.flag);
-        let server = tiny_http::Server::http(LISTENHOST.flag).unwrap();
+        let server = match tiny_http::Server::http(LISTENHOST.flag) {
+            Ok(server) => server,
+            Err(err) => {
+                let mut signal = stop_signal.write().unwrap();
+                *signal = true;
+                error!("Error starting render thread {}", err);
+                error!("Shutting down all threads...");
+                return;
+            }
+        };
         loop {
             info!("Waiting for request");
             match server.recv() {
