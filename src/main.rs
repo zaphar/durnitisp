@@ -97,7 +97,7 @@ fn attempt_stun_connect(addr: SocketAddr) -> Result<SystemTime, ConnectError> {
     Ok(SystemTime::now())
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let default_stun_servers: Vec<&'static str> = vec![
         "stun.l.google.com:19302",
         "stun.ekiga.net:3478",
@@ -217,4 +217,5 @@ fn main() {
     parent.schedule(Box::new(render_thread));
     // Blocks forever
     parent.wait();
+    Ok(())
 }
