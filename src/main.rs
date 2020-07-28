@@ -125,7 +125,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     let level = if DEBUG.flag { 3 } else { 2 };
-    stderrlog::new().verbosity(level).init()?;
+    stderrlog::new()
+        .verbosity(level)
+        .timestamp(stderrlog::Timestamp::Millisecond)
+        .init()?;
 
     if stun_servers.is_empty() {
         stun_servers = default_stun_servers;
