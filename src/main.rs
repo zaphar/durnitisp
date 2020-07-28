@@ -109,8 +109,6 @@ fn main() -> anyhow::Result<()> {
         "stun.l.google.com:19302",
         "stun.ekiga.net:3478",
         "stun.xten.com:3478",
-        "stun.softjoys.com:3478",
-        "stun1.noc.ams-ix.net:3478",
     ];
     let mut stun_servers = gflags::parse();
 
