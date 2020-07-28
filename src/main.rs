@@ -216,42 +216,35 @@ fn main() -> anyhow::Result<()> {
         });
         parent.schedule(Box::new(connect_thread));
     }
-    let stop_signal = stop_signal.clone();
-    let render_thread = thread::Pending::new(move || {
-        debug!("attempting to start server on {}", LISTENHOST.flag);
-        let server = match tiny_http::Server::http(LISTENHOST.flag) {
-            Ok(server) => server,
-            Err(err) => {
-                let mut signal = stop_signal.write().unwrap();
-                *signal = true;
-                error!("Error starting render thread {}", err);
-                error!("Shutting down all threads...");
-                return;
-            }
-        };
-        loop {
-            info!("Waiting for request");
-            match server.recv() {
-                Ok(req) => {
-                    let mut buffer = vec![];
-                    // Gather the metrics.
-                    let encoder = TextEncoder::new();
-                    let metric_families = r.gather();
-                    encoder.encode(&metric_families, &mut buffer).unwrap();
+    debug!("attempting to start server on {}", LISTENHOST.flag);
+    let server = match tiny_http::Server::http(LISTENHOST.flag) {
+        Ok(server) => server,
+        Err(err) => {
+            let mut signal = stop_signal.write().unwrap();
+            *signal = true;
+            error!("Error starting render thread {}", err);
+            error!("Shutting down all threads...");
+            return Err(anyhow::Error::msg(format!("{}", err)));
+        }
+    };
+    loop {
+        info!("Waiting for request");
+        match server.recv() {
+            Ok(req) => {
+                let mut buffer = vec![];
+                // Gather the metrics.
+                let encoder = TextEncoder::new();
+                let metric_families = r.gather();
+                encoder.encode(&metric_families, &mut buffer).unwrap();
 
-                    let response = tiny_http::Response::from_data(buffer).with_status_code(200);
-                    if let Err(e) = req.respond(response) {
-                        info!("Error responding to request {}", e);
-                    }
+                let response = tiny_http::Response::from_data(buffer).with_status_code(200);
+                if let Err(e) = req.respond(response) {
+                    info!("Error responding to request {}", e);
                 }
-                Err(e) => {
-                    info!("Invalid http request! {}", e);
-                }
+            }
+            Err(e) => {
+                info!("Invalid http request! {}", e);
             }
         }
-    });
-    parent.schedule(Box::new(render_thread));
-    // Blocks forever
-    parent.wait();
-    Ok(())
+    }
 }
