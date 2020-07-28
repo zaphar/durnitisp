@@ -25,6 +25,8 @@ use prometheus;
 use prometheus::{CounterVec, Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
 use tiny_http;
 
+use log::{error, info};
+
 gflags::define! {
     /// Print this help text.
     -h, --help = false
@@ -74,7 +76,7 @@ fn resolve_addrs(servers: &Vec<&str>) -> io::Result<Vec<SocketAddr>> {
         // TODO for resolution errors return a more valid error with the domain name.
         match name.to_socket_addrs() {
             Ok(addr) => results.extend(addr),
-            Err(e) => eprintln!("Failed to resolve {} with error {}", name, e),
+            Err(e) => info!("Failed to resolve {} with error {}", name, e),
         }
     }
     return Ok(results);
@@ -116,6 +118,9 @@ fn main() -> anyhow::Result<()> {
         println!("FLAGS:");
         gflags::print_help_and_exit(0);
     }
+
+    stderrlog::new().verbosity(2).init()?;
+
     if stun_servers.is_empty() {
         stun_servers = default_stun_servers;
     }
@@ -149,10 +154,10 @@ fn main() -> anyhow::Result<()> {
         let connect_thread = thread::Pending::new(move || {
             loop {
                 let now = SystemTime::now();
-                eprintln!("Attempting to connect to {}", domain_name);
+                info!("Attempting to connect to {}", domain_name);
                 match attempt_stun_connect(s) {
                     Ok(finish_time) => {
-                        eprintln!("Success! connecting to {}", domain_name);
+                        info!("Success! connecting to {}", domain_name);
                         stun_counter_vec_copy
                             .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
                             .inc();
@@ -162,7 +167,7 @@ fn main() -> anyhow::Result<()> {
                             .set(finish_time.duration_since(now).unwrap().as_millis() as i64);
                     }
                     Err(ConnectError::Timeout(finish_time)) => {
-                        eprintln!(
+                        info!(
                             "Stun connection to {} timedout after {} millis",
                             domain_name,
                             finish_time.duration_since(now).unwrap().as_millis()
@@ -172,13 +177,13 @@ fn main() -> anyhow::Result<()> {
                             .inc();
                     }
                     Err(ConnectError::Err(e)) => {
-                        eprintln!("Error connecting to {}: {}", domain_name, e);
+                        error!("Error connecting to {}: {}", domain_name, e);
                         stun_counter_vec_copy
                             .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
                             .inc();
                     }
                     Err(ConnectError::Incomplete) => {
-                        eprintln!("Connection to {} was incomplete", domain_name);
+                        error!("Connection to {} was incomplete", domain_name);
                         stun_counter_vec_copy
                             .with(&prometheus::labels! {"result" => "incomplete", "domain" => domain_name})
                             .inc();
@@ -194,7 +199,7 @@ fn main() -> anyhow::Result<()> {
     let render_thread = thread::Pending::new(move || {
         let server = tiny_http::Server::http(LISTENHOST.flag).unwrap();
         loop {
-            eprintln!("Waiting for request");
+            info!("Waiting for request");
             match server.recv() {
                 Ok(req) => {
                     let mut buffer = vec![];
@@ -205,11 +210,11 @@ fn main() -> anyhow::Result<()> {
 
                     let response = tiny_http::Response::from_data(buffer).with_status_code(200);
                     if let Err(e) = req.respond(response) {
-                        eprintln!("Error responding to request {}", e);
+                        info!("Error responding to request {}", e);
                     }
                 }
                 Err(e) => {
-                    eprintln!("Invalid http request! {}", e);
+                    info!("Invalid http request! {}", e);
                 }
             }
         }
