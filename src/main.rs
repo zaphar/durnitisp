@@ -261,6 +261,10 @@ fn main() -> anyhow::Result<()> {
             }
         });
         parent.schedule(Box::new(connect_thread));
+        // Spread the probe threads out so they're somewhat uniformly distributed.
+        std::thread::sleep(std::time::Duration::from_micros(
+            DELAYSECS.flag * 1000000 / (socket_addrs.len() as u64),
+        ))
     }
     // Blocks forever
     parent.wait();
