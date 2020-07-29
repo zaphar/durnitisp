@@ -161,11 +161,18 @@ fn main() -> anyhow::Result<()> {
     // Create a Registry and register metrics.
     let r = Registry::new();
     let stun_counter_vec = CounterVec::new(counter_opts, &["result", "domain"]).unwrap();
+    let stun_success_vec = IntGaugeVec::new(
+        Opts::new("stun_success", "Stun probe successes"),
+        &["domain"],
+    )
+    .unwrap();
     r.register(Box::new(stun_counter_vec.clone()))
         .expect("Failed to register stun connection counter");
     let stun_latency_vec = IntGaugeVec::new(gauge_opts, &["domain"]).unwrap();
     r.register(Box::new(stun_latency_vec.clone()))
         .expect("Failed to register stun latency guage");
+    r.register(Box::new(stun_success_vec.clone()))
+        .expect("Failed to register stun success gauge");
     let socket_addrs = resolve_addrs(&stun_servers).unwrap();
     let stun_servers = Arc::new(stun_servers);
 
@@ -216,6 +223,7 @@ fn main() -> anyhow::Result<()> {
         let stun_servers_copy = stun_servers.clone();
         let stun_counter_vec_copy = stun_counter_vec.clone();
         let stun_latency_vec_copy = stun_latency_vec.clone();
+        let stun_success_vec_copy = stun_success_vec.clone();
         let s = s.clone();
         let domain_name = *stun_servers_copy.get(i).unwrap();
         let stop_signal = stop_signal.clone();
@@ -241,6 +249,9 @@ fn main() -> anyhow::Result<()> {
                             .with(&prometheus::labels! {"domain" => domain_name})
                             // Technically this could be lossy but we'll chance it anyway.
                             .set(finish_time.duration_since(now).unwrap().as_millis() as i64);
+                        stun_success_vec_copy
+                            .with(&prometheus::labels! {"domain" => domain_name})
+                            .set(1);
                     }
                     Err(ConnectError::Timeout(finish_time)) => {
                         info!(
@@ -251,18 +262,27 @@ fn main() -> anyhow::Result<()> {
                         stun_counter_vec_copy
                             .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
                             .inc();
+                        stun_success_vec_copy
+                            .with(&prometheus::labels! {"domain" => domain_name})
+                            .set(0);
                     }
                     Err(ConnectError::Err(e)) => {
                         error!("Error connecting to {}: {}", domain_name, e);
                         stun_counter_vec_copy
                             .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
                             .inc();
+                        stun_success_vec_copy
+                            .with(&prometheus::labels! {"domain" => domain_name})
+                            .set(0);
                     }
                     Err(ConnectError::Incomplete) => {
                         error!("Connection to {} was incomplete", domain_name);
                         stun_counter_vec_copy
                             .with(&prometheus::labels! {"result" => "incomplete", "domain" => domain_name})
                             .inc();
+                        stun_success_vec_copy
+                            .with(&prometheus::labels! {"domain" => domain_name})
+                            .set(0);
                     }
                 }
 
