@@ -24,6 +24,7 @@ use nursery::thread;
 use nursery::{Nursery, Waitable};
 use prometheus;
 use prometheus::{CounterVec, Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
+use stderrlog;
 use tiny_http;
 
 use log::{debug, error, info};
