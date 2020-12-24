@@ -24,7 +24,9 @@ use prometheus::{CounterVec, Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
 use stderrlog;
 use tiny_http;
 
+mod icmp;
 mod stun;
+mod util;
 
 gflags::define! {
     /// Print this help text.
@@ -58,6 +60,8 @@ fn main() -> anyhow::Result<()> {
     ];
     let mut stun_servers = gflags::parse();
 
+    let default_ping_hosts: Vec<&'static str> = vec!["google.com"];
+
     if HELP.flag {
         println!("durnitisp <options> <list of hostname:port>");
         println!("");
@@ -82,6 +86,8 @@ fn main() -> anyhow::Result<()> {
     if stun_servers.is_empty() {
         stun_servers = default_stun_servers;
     }
+    // FIXME(jwall): allow them to override ping hosts
+    let ping_hosts = default_ping_hosts;
     let counter_opts = Opts::new(
         "stun_attempt_counter",
         "Counter for the good, bad, and total attempts to connect to stun server.",
@@ -108,8 +114,10 @@ fn main() -> anyhow::Result<()> {
         .expect("Failed to register stun latency guage");
     r.register(Box::new(stun_success_vec.clone()))
         .expect("Failed to register stun success gauge");
-    let socket_addrs = stun::resolve_addrs(&stun_servers).unwrap();
+    let stun_socket_addrs = util::resolve_addrs(&stun_servers).unwrap();
     let stun_servers = Arc::new(stun_servers);
+    let ping_addrs = util::resolve_ip_addrs(&ping_hosts).unwrap();
+    let ping_hosts = Arc::new(ping_hosts);
 
     let mut parent = Nursery::new();
     // First we start the render thread.
@@ -153,30 +161,44 @@ fn main() -> anyhow::Result<()> {
         });
         parent.adopt(Box::new(render_thread));
     }
-    // Then we attempt connections to each server.
-    for (i, s) in socket_addrs.iter().enumerate() {
+    for (i, addr) in ping_addrs.iter().cloned().enumerate() {
+        // TODO(Prometheus stats)
+        let ping_hosts_copy = ping_hosts.clone();
+        if let Some(addr) = dbg!(addr) {
+            let domain_name = *ping_hosts_copy.get(i).unwrap();
+            debug!("Pinging {}", domain_name);
+            let stop_signal = stop_signal.clone();
+            let ping_thread = thread::Pending::new(move || {
+                icmp::start_echo_loop(domain_name, stop_signal, addr, i as u16);
+            });
+            parent.schedule(Box::new(ping_thread));
+        }
+    }
+    // Then we attempt to start connections to each stun server.
+    for (i, s) in stun_socket_addrs.iter().enumerate() {
         let stun_servers_copy = stun_servers.clone();
         let stun_counter_vec_copy = stun_counter_vec.clone();
         let stun_latency_vec_copy = stun_latency_vec.clone();
         let stun_success_vec_copy = stun_success_vec.clone();
-        let s = s.clone();
-        let domain_name = *stun_servers_copy.get(i).unwrap();
-        let stop_signal = stop_signal.clone();
-        let connect_thread = thread::Pending::new(move || {
-            stun::start_listen_thread(
-                domain_name,
-                stop_signal,
-                s,
-                stun_counter_vec_copy,
-                stun_latency_vec_copy,
-                stun_success_vec_copy,
-            )
-        });
-        parent.schedule(Box::new(connect_thread));
-        // Spread the probe threads out so they're somewhat uniformly distributed.
-        std::thread::sleep(std::time::Duration::from_micros(
-            stun::delay_secs() * 1000000 / (socket_addrs.len() as u64),
-        ))
+        if let Some(s) = s.clone() {
+            let domain_name = *stun_servers_copy.get(i).unwrap();
+            let stop_signal = stop_signal.clone();
+            let connect_thread = thread::Pending::new(move || {
+                stun::start_listen_thread(
+                    domain_name,
+                    stop_signal,
+                    s,
+                    stun_counter_vec_copy,
+                    stun_latency_vec_copy,
+                    stun_success_vec_copy,
+                )
+            });
+            parent.schedule(Box::new(connect_thread));
+            // Spread the probe threads out so they're somewhat uniformly distributed.
+            std::thread::sleep(std::time::Duration::from_micros(
+                stun::delay_secs() * 1000000 / (stun_socket_addrs.len() as u64),
+            ))
+        };
     }
     // Blocks forever
     parent.wait();

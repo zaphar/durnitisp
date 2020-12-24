@@ -12,17 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use gflags;
+use log::{debug, error, info};
+use prometheus::{CounterVec, IntGaugeVec};
 use std::convert::From;
 use std::io;
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::SystemTime;
-
-use log::{debug, error, info};
-use prometheus::{CounterVec, IntGaugeVec};
-
-use gflags;
 
 gflags::define! {
     /// Read timeout for the stun server udp receive
@@ -57,18 +55,6 @@ impl From<io::Error> for ConnectError {
     }
 }
 
-pub fn resolve_addrs(servers: &Vec<&str>) -> io::Result<Vec<SocketAddr>> {
-    let mut results = Vec::new();
-    for name in servers.iter().cloned() {
-        // TODO for resolution errors return a more valid error with the domain name.
-        match name.to_socket_addrs() {
-            Ok(addr) => results.extend(addr),
-            Err(e) => info!("Failed to resolve {} with error {}", name, e),
-        }
-    }
-    return Ok(results);
-}
-
 fn attempt_stun_connect(addr: SocketAddr) -> Result<SystemTime, ConnectError> {
     // We let the OS choose the port by specifying 0
     let local_socket = UdpSocket::bind("0.0.0.0:0")?;
@@ -99,7 +85,7 @@ pub fn start_listen_thread(
         {
             // Limit the scope of this lock
             if *stop_signal.read().unwrap() {
-                info!("Stopping thread for {}", domain_name);
+                info!("Stopping stun thread for {}", domain_name);
                 return;
             }
         }
