@@ -29,18 +29,23 @@ mod stun;
 mod util;
 
 gflags::define! {
-    /// Print this help text.
+    /// Print this help text
     -h, --help = false
 }
 
 gflags::define! {
-    /// Port to listen on for exporting variables prometheus style.
+    /// Port to listen on for exporting variables prometheus style
     --listenHost = "0.0.0.0:8080"
 }
 
 gflags::define! {
     /// Enable debug logging
     --debug = false
+}
+
+gflags::define! {
+    /// Comma separated list of hosts to ping
+    --pingHosts = "google.com"
 }
 
 fn main() -> anyhow::Result<()> {
@@ -59,8 +64,6 @@ fn main() -> anyhow::Result<()> {
         "stun1.noc.ams-ix.net:3478",
     ];
     let mut stun_servers = gflags::parse();
-
-    let default_ping_hosts: Vec<&'static str> = vec!["google.com"];
 
     if HELP.flag {
         println!("durnitisp <options> <list of hostname:port>");
@@ -87,7 +90,7 @@ fn main() -> anyhow::Result<()> {
         stun_servers = default_stun_servers;
     }
     // FIXME(jwall): allow them to override ping hosts
-    let ping_hosts = default_ping_hosts;
+    let ping_hosts: Vec<&str> = PINGHOSTS.flag.split(",").collect();
     let stop_signal = Arc::new(RwLock::new(false));
 
     // Create a Registry and register metrics.

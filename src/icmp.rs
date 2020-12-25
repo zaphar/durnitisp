@@ -19,22 +19,22 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 gflags::define! {
-    // The size in bytes of the ping requests.
+    /// The size in bytes of the ping requests.
     --pingPayload = "durnitisp"
 }
 
 gflags::define! {
-    // The size in bytes of the ping requests.
+    /// The size in bytes of the ping requests.
     --pingTTL: u32 = 113
 }
 
 gflags::define! {
-    // The size in bytes of the ping requests.
+    /// The size in bytes of the ping requests.
     --pingTimeout: u64 = 2048
 }
 
 gflags::define! {
-    // The size in bytes of the ping requests.
+    /// The size in bytes of the ping requests.
     --maxHops: u8 = 50
 }
 

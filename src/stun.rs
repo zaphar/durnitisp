@@ -28,7 +28,7 @@ gflags::define! {
 }
 
 gflags::define! {
-    /// Delay between lookup attempts in seconds.
+    /// Delay between lookup attempts in seconds
     --delaySecs: u64 = 60
 }
 
