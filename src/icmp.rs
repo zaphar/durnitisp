@@ -11,72 +11,41 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::convert::Into;
-use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
-
+use ekko::{Ekko, EkkoResponse};
 use gflags;
-use log::{debug, error, info};
-use packet::icmp::echo::{Builder, Packet};
-use packet::Builder as PBuilder;
-use socket2::Domain;
-use socket2::Protocol;
-use socket2::SockAddr;
-use socket2::Socket;
+use log::{error, info};
+use prometheus::{CounterVec, IntGaugeVec};
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 gflags::define! {
     // The size in bytes of the ping requests.
-    --pingPayload = "durnitisp ping test"
+    --pingPayload = "durnitisp"
 }
 
-fn make_echo_packet(ident: u16) -> Packet<Vec<u8>> {
-    let buffer = Builder::default()
-        .request()
-        .unwrap()
-        .identifier(ident)
-        .unwrap()
-        .sequence(0)
-        .unwrap()
-        .payload(PINGPAYLOAD.flag.as_bytes())
-        .unwrap()
-        .build()
-        .unwrap();
-    Packet::unchecked(buffer)
+gflags::define! {
+    // The size in bytes of the ping requests.
+    --pingTTL: u32 = 113
+}
+
+gflags::define! {
+    // The size in bytes of the ping requests.
+    --pingTimeout: u64 = 2048
+}
+
+gflags::define! {
+    // The size in bytes of the ping requests.
+    --maxHops: u8 = 50
 }
 
 pub fn start_echo_loop(
     domain_name: &str,
     stop_signal: Arc<RwLock<bool>>,
-    addr: IpAddr,
-    ident: u16,
+    ping_latency_guage: IntGaugeVec,
+    ping_counter: CounterVec,
 ) {
-    info!("Starting ping of {}", domain_name);
-    // First we construct our icmp transport
-    // TODO(jwall): Timeouts.
-    // TODO(jwall): Handle out of order packets.
-    let (domain, protocol) = match addr {
-        IpAddr::V4(_) => (Domain::ipv4(), Protocol::icmpv4()),
-        IpAddr::V6(_) => (Domain::ipv6(), Protocol::icmpv6()),
-    };
-    // Construct a socket to send the ICMP request on.
-    // socket type: Ip, Datagram, ICMP
-    let addr: SocketAddr = (addr, 0).into();
-    let addr: SockAddr = addr.into();
-    let socket = match Socket::new(domain, socket2::Type::raw(), Some(protocol)) {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Unable to create socket for icmp request:\n {}", e);
-            return;
-        }
-    };
-
-    socket
-        .set_read_timeout(Some(Duration::from_millis(2048)))
-        .unwrap();
-    // then we start our loop
-    let mut n = 0;
-    let mut pkt = make_echo_packet(ident);
+    info!("Pinging {}", domain_name);
+    let mut sender = Ekko::with_target(domain_name).unwrap();
     loop {
         {
             // Limit the scope of this lock
@@ -85,41 +54,35 @@ pub fn start_echo_loop(
                 return;
             }
         }
-        pkt.set_sequence(n).unwrap();
-        // TODO(jwall): Count the errors?
-        // construct echo packet
-        let time_of_send = Instant::now();
-        // send echo packet
-        let pkt_buf: &[u8] = pkt.as_ref();
-        debug!("Sending echo request for {}", domain_name);
-        let sent = socket.send_to(pkt_buf, &addr).unwrap();
-        if pkt_buf.len() != sent {
-            error!("Failed to send a complete icmp packet!");
-            continue;
-        }
-        //    // Wait for echo response
-        debug!("Waiting for echo reply from {}", domain_name);
-        let mut buf = vec![0; sent];
-        let _rcv_size = match socket.recv(&mut buf) {
-            Ok(sz) => sz,
-            Err(e) => {
-                if let std::io::ErrorKind::TimedOut = e.kind() {
-                    error!("icmp echo request timed out to {}", domain_name);
-                    continue;
-                }
-                error!("Error recieving on icmp socket! {:?}", e);
-                return;
+        let response = sender
+            .send_with_timeout(MAXHOPS.flag, Some(Duration::from_millis(PINGTIMEOUT.flag)))
+            .unwrap();
+        match response {
+            EkkoResponse::DestinationResponse(r) => {
+                info!(
+                    "ICMP: Reply from {}: time={}ms",
+                    r.address.unwrap(),
+                    r.elapsed.as_millis(),
+                );
+                ping_counter
+                    .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
+                    .inc();
+                ping_latency_guage
+                    .with(&prometheus::labels! {"domain" => domain_name})
+                    .set(r.elapsed.as_millis() as i64);
             }
-        };
-        let echo = Packet::new(&buf).unwrap();
-        if echo.sequence() == n {
-            let round_trip_time = Instant::now().checked_duration_since(time_of_send).unwrap();
-            // record this time
-            info!("Sequence # {} {}ms", n, round_trip_time.as_millis());
-        } else {
-            error!("Got the wrong sequence number {}", echo.sequence());
+            EkkoResponse::ExceededResponse(r) => {
+                ping_counter
+                    .with(&prometheus::labels! {"result" => "timedout", "domain" => domain_name})
+                    .inc();
+            }
+            _ => {
+                ping_counter
+                    .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
+                    .inc();
+                error!("{:?}", response);
+            }
         }
-        // Increment our sequence number
-        n += 1;
+        std::thread::sleep(Duration::from_secs(3));
     }
 }

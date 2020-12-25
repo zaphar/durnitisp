@@ -88,35 +88,50 @@ fn main() -> anyhow::Result<()> {
     }
     // FIXME(jwall): allow them to override ping hosts
     let ping_hosts = default_ping_hosts;
-    let counter_opts = Opts::new(
-        "stun_attempt_counter",
-        "Counter for the good, bad, and total attempts to connect to stun server.",
-    );
-    let gauge_opts = Opts::new(
-        "stun_attempt_latency_ms",
-        "Latency guage in millis per stun domain.",
-    );
-
     let stop_signal = Arc::new(RwLock::new(false));
 
     // Create a Registry and register metrics.
     let r = Registry::new();
-    let stun_counter_vec = CounterVec::new(counter_opts, &["result", "domain"]).unwrap();
+    let stun_counter_vec = CounterVec::new(
+        Opts::new(
+            "stun_attempt_counter",
+            "Counter for the good, bad, and total attempts to connect to stun server.",
+        ),
+        &["result", "domain"],
+    )
+    .unwrap();
     let stun_success_vec = IntGaugeVec::new(
         Opts::new("stun_success", "Stun probe successes"),
         &["domain"],
     )
     .unwrap();
+    let stun_latency_vec = IntGaugeVec::new(
+        Opts::new(
+            "stun_attempt_latency_ms",
+            "Latency guage in millis per stun domain.",
+        ),
+        &["domain"],
+    )
+    .unwrap();
+    let ping_latency_vec =
+        IntGaugeVec::new(Opts::new("ping_latency", "ICMP Ping latency"), &["domain"]).unwrap();
+    let ping_counter_vec = CounterVec::new(
+        Opts::new("ping_counter", "Ping Request Counter"),
+        &["result", "domain"],
+    )
+    .unwrap();
     r.register(Box::new(stun_counter_vec.clone()))
         .expect("Failed to register stun connection counter");
-    let stun_latency_vec = IntGaugeVec::new(gauge_opts, &["domain"]).unwrap();
     r.register(Box::new(stun_latency_vec.clone()))
         .expect("Failed to register stun latency guage");
     r.register(Box::new(stun_success_vec.clone()))
         .expect("Failed to register stun success gauge");
+    r.register(Box::new(ping_latency_vec.clone()))
+        .expect("Failed to register ping latency guage");
+    r.register(Box::new(ping_counter_vec.clone()))
+        .expect("Failed to register ping counter");
     let stun_socket_addrs = util::resolve_addrs(&stun_servers).unwrap();
     let stun_servers = Arc::new(stun_servers);
-    let ping_addrs = util::resolve_ip_addrs(&ping_hosts).unwrap();
     let ping_hosts = Arc::new(ping_hosts);
 
     let mut parent = Nursery::new();
@@ -161,18 +176,15 @@ fn main() -> anyhow::Result<()> {
         });
         parent.adopt(Box::new(render_thread));
     }
-    for (i, addr) in ping_addrs.iter().cloned().enumerate() {
+    for (i, domain_name) in ping_hosts.iter().cloned().enumerate() {
         // TODO(Prometheus stats)
-        let ping_hosts_copy = ping_hosts.clone();
-        if let Some(addr) = dbg!(addr) {
-            let domain_name = *ping_hosts_copy.get(i).unwrap();
-            debug!("Pinging {}", domain_name);
-            let stop_signal = stop_signal.clone();
-            let ping_thread = thread::Pending::new(move || {
-                icmp::start_echo_loop(domain_name, stop_signal, addr, i as u16);
-            });
-            parent.schedule(Box::new(ping_thread));
-        }
+        let stop_signal = stop_signal.clone();
+        let ping_latency_vec = ping_latency_vec.clone();
+        let ping_counter_vec = ping_counter_vec.clone();
+        let ping_thread = thread::Pending::new(move || {
+            icmp::start_echo_loop(domain_name, stop_signal, ping_latency_vec, ping_counter_vec);
+        });
+        parent.schedule(Box::new(ping_thread));
     }
     // Then we attempt to start connections to each stun server.
     for (i, s) in stun_socket_addrs.iter().enumerate() {
