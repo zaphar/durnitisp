@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::io;
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs};
 
 use log::info;
 
@@ -30,22 +30,4 @@ pub fn resolve_addrs<'a>(servers: &'a Vec<&str>) -> io::Result<Vec<Option<Socket
         }
     }
     return Ok(results);
-}
-
-pub fn resolve_ip_addrs(hosts: &Vec<&str>) -> io::Result<Vec<Option<IpAddr>>> {
-    let mut results = Vec::with_capacity(hosts.len());
-    // NOTE(jwall): This is a silly hack due to the fact that the proper way
-    // to do host lookups in the Rust stdlib has not settled yet.
-    // TODO(jwall): Do this in a less hacky method once host lookups
-    // are settled properly.
-    for host in hosts.iter().cloned() {
-        match format!("{}:8080", host).to_socket_addrs() {
-            Ok(addr) => results.push(addr.into_iter().next().map(|a| a.ip())),
-            Err(e) => {
-                info!("Failed to resolve {} with error {}", host, e);
-                results.push(None);
-            }
-        }
-    }
-    Ok(results)
 }

@@ -71,7 +71,7 @@ pub fn start_echo_loop(
                     .with(&prometheus::labels! {"domain" => domain_name})
                     .set(r.elapsed.as_millis() as i64);
             }
-            EkkoResponse::ExceededResponse(r) => {
+            EkkoResponse::ExceededResponse(_) => {
                 ping_counter
                     .with(&prometheus::labels! {"result" => "timedout", "domain" => domain_name})
                     .inc();

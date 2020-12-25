@@ -179,7 +179,7 @@ fn main() -> anyhow::Result<()> {
         });
         parent.adopt(Box::new(render_thread));
     }
-    for (i, domain_name) in ping_hosts.iter().cloned().enumerate() {
+    for domain_name in ping_hosts.iter().cloned() {
         // TODO(Prometheus stats)
         let stop_signal = stop_signal.clone();
         let ping_latency_vec = ping_latency_vec.clone();
