@@ -72,10 +72,10 @@ pub fn start_echo_loop(
                             r.elapsed.as_millis(),
                         );
                         ping_counter
-                            .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name, "ip" => &resolved})
+                            .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
                             .inc();
                         ping_latency_guage
-                            .with(&prometheus::labels! {"domain" => domain_name, "ip" => &resolved})
+                            .with(&prometheus::labels! {"domain" => domain_name})
                             .set(r.elapsed.as_millis() as i64);
                     }
                     EkkoResponse::UnreachableResponse((_, ref _code)) => {
@@ -83,7 +83,7 @@ pub fn start_echo_loop(
                         error!("{:?}", r);
                         info!("Restarting our sender");
                         ping_counter
-                            .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name, "ip" => &resolved})
+                            .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name})
                             .inc();
                         let resolved = resolve_host_address(domain_name);
                         let mut new_sender = Ekko::with_target(&resolved).unwrap();
@@ -92,19 +92,19 @@ pub fn start_echo_loop(
                     }
                     EkkoResponse::ExceededResponse(_) => {
                         ping_counter
-                            .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name, "ip" => &resolved})
+                            .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
                             .inc();
                     }
                     _ => {
                         ping_counter
-                            .with(&prometheus::labels! {"result" => "err", "domain" => domain_name, "ip" => &resolved})
+                            .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
                             .inc();
                         error!("{:?}", r);
                     }
                 },
                 Err(e) => {
                     ping_counter
-                        .with(&prometheus::labels! {"result" => "err", "domain" => domain_name, "ip" => &resolved})
+                        .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
                         .inc();
                     error!("Ping send to domain: {} address: {} failed: {:?}, Trying again later", domain_name, &resolved, e);
                 }
