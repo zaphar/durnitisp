@@ -66,17 +66,20 @@ pub fn start_echo_loop(
             .send_with_timeout(MAXHOPS.flag, Some(Duration::from_millis(PINGTIMEOUT.flag))) {
                 Ok(r) => match r {
                     EkkoResponse::DestinationResponse(r) => {
+                        let elapsed = r.elapsed.as_millis();
                         info!(
                             "ICMP: Reply from {}: time={}ms",
                             r.address.unwrap(),
-                            r.elapsed.as_millis(),
+                            elapsed,
                         );
                         ping_counter
                             .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
                             .inc();
-                        ping_latency_guage
-                            .with(&prometheus::labels! {"domain" => domain_name})
-                            .set(r.elapsed.as_millis() as i64);
+                        if elapsed != 0 {
+                            ping_latency_guage
+                                .with(&prometheus::labels! {"domain" => domain_name})
+                                .set(r.elapsed.as_millis() as i64);
+                        }
                     }
                     EkkoResponse::UnreachableResponse((_, ref _code)) => {
                         // If we got unreachable we need to set up a new sender.
