@@ -41,13 +41,17 @@ gflags::define! {
     --maxHops: u8 = 50
 }
 
+fn resolve_host_address(host: &str) -> String {
+    format!("{}", util::resolve_hosts(&vec![host]).unwrap().first().unwrap().unwrap())
+}
+
 pub fn start_echo_loop(
     domain_name: &str,
     stop_signal: Arc<RwLock<bool>>,
     ping_latency_guage: IntGaugeVec,
     ping_counter: CounterVec,
 ) {
-    let resolved = format!("{}", util::resolve_hosts(&vec![domain_name]).unwrap().first().unwrap().unwrap());
+    let resolved = resolve_host_address(domain_name);
     info!("Attempting to ping domain {} at address: {}", domain_name, resolved);
     let mut sender = Ekko::with_target(&resolved).unwrap();
     loop {
@@ -81,6 +85,7 @@ pub fn start_echo_loop(
                         ping_counter
                             .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name, "ip" => &resolved})
                             .inc();
+                        let resolved = resolve_host_address(domain_name);
                         let mut new_sender = Ekko::with_target(&resolved).unwrap();
                         std::mem::swap(&mut sender, &mut new_sender);
 
