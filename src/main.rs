@@ -118,10 +118,10 @@ fn main() -> anyhow::Result<()> {
     )
     .unwrap();
     let ping_latency_vec =
-        IntGaugeVec::new(Opts::new("ping_latency", "ICMP Ping latency"), &["domain"]).unwrap();
+        IntGaugeVec::new(Opts::new("ping_latency", "ICMP Ping latency"), &["domain", "ip"]).unwrap();
     let ping_counter_vec = CounterVec::new(
         Opts::new("ping_counter", "Ping Request Counter"),
-        &["result", "domain"],
+        &["result", "domain", "ip"],
     )
     .unwrap();
     r.register(Box::new(stun_counter_vec.clone()))
