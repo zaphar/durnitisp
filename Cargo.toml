@@ -14,4 +14,5 @@ nursery = "^0.0.1"
 prometheus = "^0.9.0"
 stderrlog = "0.4"
 tiny_http = "^0.7.0"
-ekko = "0.2.0"
+ekko = { git = "https://github.com/dev-bio/Ekko", branch = "ipv-hops"}
+resolve = "^0.2.0"
