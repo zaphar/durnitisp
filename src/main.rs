@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::convert::Into;
 
 use gflags;
 use log::{debug, error, info};
@@ -133,7 +134,7 @@ fn main() -> anyhow::Result<()> {
         .expect("Failed to register ping latency guage");
     r.register(Box::new(ping_counter_vec.clone()))
         .expect("Failed to register ping counter");
-    let stun_socket_addrs = util::resolve_addrs(&stun_servers).unwrap();
+    let stun_socket_addrs = util::resolve_socket_addrs(&stun_servers).unwrap();
     let stun_servers = Arc::new(stun_servers);
     let ping_hosts = Arc::new(ping_hosts);
 
@@ -202,7 +203,7 @@ fn main() -> anyhow::Result<()> {
                 stun::start_listen_thread(
                     domain_name,
                     stop_signal,
-                    s,
+                    s.into(),
                     stun_counter_vec_copy,
                     stun_latency_vec_copy,
                     stun_success_vec_copy,

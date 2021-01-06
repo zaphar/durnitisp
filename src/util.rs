@@ -13,11 +13,33 @@
 // limitations under the License.
 
 use std::io;
+use std::net::IpAddr;
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use log::info;
+use resolve::config::DnsConfig;
+use resolve::resolver::{DnsResolver};
+use gflags;
 
-pub fn resolve_addrs<'a>(servers: &'a Vec<&str>) -> io::Result<Vec<Option<SocketAddr>>> {
+gflags::define! {
+    /// Allow IPv6 addresses for domain name lookups.
+    --allowIpv6: bool = false
+}
+
+pub fn resolve_hosts<'a>(servers: &'a Vec<&str>) -> io::Result<Vec<Option<IpAddr>>> {
+    let mut results = Vec::new();
+    let mut config = DnsConfig::load_default()?;
+    config.use_inet6 = ALLOWIPV6.flag;
+    let resolver = DnsResolver::new(config)?;
+    for name in servers.iter().cloned() {
+        // TODO for resolution errors return a more valid error with the domain name.
+        let mut iter = resolver.resolve_host(name)?;
+        results.push(iter.next());
+    }
+    return Ok(results);
+}
+
+pub fn resolve_socket_addrs<'a>(servers: &'a Vec<&str>) -> io::Result<Vec<Option<SocketAddr>>> {
     let mut results = Vec::new();
     for name in servers.iter().cloned() {
         // TODO for resolution errors return a more valid error with the domain name.

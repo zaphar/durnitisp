@@ -11,12 +11,15 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+
+use crate::util;
+
 use ekko::{Ekko, EkkoResponse};
 use gflags;
 use log::{error, info};
 use prometheus::{CounterVec, IntGaugeVec};
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
 
 gflags::define! {
     /// The size in bytes of the ping requests.
@@ -44,8 +47,9 @@ pub fn start_echo_loop(
     ping_latency_guage: IntGaugeVec,
     ping_counter: CounterVec,
 ) {
-    info!("Pinging {}", domain_name);
-    let mut sender = Ekko::with_target(domain_name).unwrap();
+    let resolved = format!("{}", util::resolve_hosts(&vec![domain_name]).unwrap().first().unwrap().unwrap());
+    info!("Attempting to ping domain {} at address: {}", domain_name, resolved);
+    let mut sender = Ekko::with_target(&resolved).unwrap();
     loop {
         {
             // Limit the scope of this lock
@@ -54,35 +58,52 @@ pub fn start_echo_loop(
                 return;
             }
         }
-        let response = sender
-            .send_with_timeout(MAXHOPS.flag, Some(Duration::from_millis(PINGTIMEOUT.flag)))
-            .unwrap();
-        match response {
-            EkkoResponse::DestinationResponse(r) => {
-                info!(
-                    "ICMP: Reply from {}: time={}ms",
-                    r.address.unwrap(),
-                    r.elapsed.as_millis(),
-                );
-                ping_counter
-                    .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
-                    .inc();
-                ping_latency_guage
-                    .with(&prometheus::labels! {"domain" => domain_name})
-                    .set(r.elapsed.as_millis() as i64);
-            }
-            EkkoResponse::ExceededResponse(_) => {
-                ping_counter
-                    .with(&prometheus::labels! {"result" => "timedout", "domain" => domain_name})
-                    .inc();
-            }
-            _ => {
-                ping_counter
-                    .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
-                    .inc();
-                error!("{:?}", response);
-            }
-        }
+        match sender
+            .send_with_timeout(MAXHOPS.flag, Some(Duration::from_millis(PINGTIMEOUT.flag))) {
+                Ok(r) => match r {
+                    EkkoResponse::DestinationResponse(r) => {
+                        info!(
+                            "ICMP: Reply from {}: time={}ms",
+                            r.address.unwrap(),
+                            r.elapsed.as_millis(),
+                        );
+                        ping_counter
+                            .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
+                            .inc();
+                        ping_latency_guage
+                            .with(&prometheus::labels! {"domain" => domain_name})
+                            .set(r.elapsed.as_millis() as i64);
+                    }
+                    EkkoResponse::UnreachableResponse((_, ref _code)) => {
+                        // If we got unreachable we need to set up a new sender.
+                        error!("{:?}", r);
+                        info!("Restarting our sender");
+                        ping_counter
+                            .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name})
+                            .inc();
+                        let mut new_sender = Ekko::with_target(&resolved).unwrap();
+                        std::mem::swap(&mut sender, &mut new_sender);
+
+                    }
+                    EkkoResponse::ExceededResponse(_) => {
+                        ping_counter
+                            .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
+                            .inc();
+                    }
+                    _ => {
+                        ping_counter
+                            .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
+                            .inc();
+                        error!("{:?}", r);
+                    }
+                },
+                Err(e) => {
+                    ping_counter
+                        .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
+                        .inc();
+                    error!("Ping send to {} failed: {:?}, Trying again later", domain_name, e);
+                }
+            };
         std::thread::sleep(Duration::from_secs(3));
     }
 }
