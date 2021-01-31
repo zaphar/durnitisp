@@ -62,12 +62,13 @@ fn loop_impl<Sock, PH, EH>(
     err_handler: EH,
     stop_signal: Arc<RwLock<bool>>,
 ) where
-    PH: Fn(Sock::PacketType, socket2::SockAddr, Instant) -> (),
+    PH: Fn(Sock::PacketType, socket2::SockAddr, Instant, u16) -> Option<()>,
     EH: Fn(std::io::Error) -> (),
     Sock: IcmpSocket,
     Sock::AddrType: std::fmt::Display + Copy,
     Sock::PacketType: WithEchoRequest<Packet = Sock::PacketType>,
 {
+    let mut sequence: u16 = 0;
     loop {
         {
             // Limit the scope of this lock
@@ -76,7 +77,6 @@ fn loop_impl<Sock, PH, EH>(
                 return;
             }
         }
-        let sequence = 0;
         let packet = Sock::PacketType::with_echo_request(
             42,
             sequence,
@@ -86,15 +86,22 @@ fn loop_impl<Sock, PH, EH>(
         let send_time = Instant::now();
         if let Err(e) = socket.send_to(dest, packet) {
             err_handler(e);
-        }
-        match socket.rcv_from() {
-            Err(e) => {
-                err_handler(e);
+        } else {
+            loop {
+                // Keep going until we get the packet we are looking for.
+                match socket.rcv_from() {
+                    Err(e) => {
+                        err_handler(e);
+                    }
+                    Ok((resp, sock_addr)) => {
+                        if packet_handler(resp, sock_addr, send_time, sequence).is_some() {
+                            break;
+                        }
+                    }
+                }
             }
-            Ok((resp, sock_addr)) => {
-                packet_handler(resp, sock_addr, send_time);
-            }
         }
+        sequence += 1;
         std::thread::sleep(Duration::from_secs(3));
     }
 }
@@ -119,7 +126,7 @@ pub fn start_echo_loop(
             .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
             .inc();
         error!(
-            "Ping send to domain: {} and address: {} failed: {:?}, Trying again later",
+            "ICMP: error sending domain: {} and address: {} failed: {:?}, Trying again later",
             domain_name, &dest, e
         );
     };
@@ -127,14 +134,19 @@ pub fn start_echo_loop(
         IpAddr::V4(dest) => {
             let mut socket = IcmpSocket4::try_from(Ipv4Addr::new(0, 0, 0, 0)).unwrap();
             socket.set_max_hops(MAXHOPS.flag as u32);
-            let packet_handler = |p: Icmpv4Packet, s: SockAddr, send_time: Instant| {
+            let packet_handler = |p: Icmpv4Packet,
+                                  s: SockAddr,
+                                  send_time: Instant,
+                                  seq: u16|
+             -> Option<()> {
                 // We only want to handle replies for the address we are pinging.
                 if let Some(addr) = s.as_inet() {
                     if &dest != addr.ip() {
-                        return;
+                        info!("ICMP: Packet for wrong address: {}", addr.ip());
+                        return None;
                     }
                 } else {
-                    return;
+                    return None;
                 };
                 match p.message {
                     Icmpv4Message::ParameterProblem {
@@ -143,8 +155,8 @@ pub fn start_echo_loop(
                         header: _,
                     } => {
                         ping_counter
-                                    .with(&prometheus::labels! {"result" => "parameter_problem", "domain" => domain_name})
-                                    .inc();
+                            .with(&prometheus::labels! {"result" => "parameter_problem", "domain" => domain_name})
+                            .inc();
                     }
                     Icmpv4Message::Unreachable {
                         padding: _,
@@ -153,9 +165,10 @@ pub fn start_echo_loop(
                         // // If we got unreachable we need to set up a new sender.
                         // error!("{:?}", r);
                         // info!("Restarting our sender");
+                        info!("ICMP: Destination Unreachable {}", dest);
                         ping_counter
-                                    .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name})
-                                    .inc();
+                            .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name})
+                            .inc();
                         // let resolved = resolve_host_address(domain_name);
                         // let mut new_sender = Ekko::with_target(&resolved).unwrap();
                         //            std::mem::swap(&mut sender, &mut new_sender);
@@ -164,15 +177,20 @@ pub fn start_echo_loop(
                         padding: _,
                         header: _,
                     } => {
+                        info!("ICMP: Timeout for {}", dest);
                         ping_counter
-                                .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
-                                .inc();
+                            .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
+                            .inc();
                     }
                     Icmpv4Message::EchoReply {
                         identifier: _,
                         sequence,
                         payload: _,
                     } => {
+                        if sequence != seq {
+                            info!("ICMP: Discarding sequence {}", sequence);
+                            return Some(());
+                        }
                         let elapsed = Instant::now().sub(send_time.clone()).as_millis();
                         info!(
                             "ICMP: Reply from {}: time={}ms, seq={}",
@@ -187,24 +205,30 @@ pub fn start_echo_loop(
                                 .set(elapsed as i64);
                         }
                     }
-                    _ => {
+                    p => {
                         // We ignore the rest.
+                        info!("ICMP Unhandled packet {:?}", p);
                     }
                 }
+                Some(())
             };
             loop_impl(socket, dest, packet_handler, err_handler, stop_signal);
         }
         IpAddr::V6(dest) => {
             let mut socket = IcmpSocket6::try_from(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)).unwrap();
             socket.set_max_hops(MAXHOPS.flag as u32);
-            let packet_handler = |p: Icmpv6Packet, s: SockAddr, send_time: Instant| {
-                // We only want to handle replies for the addres we are pinging.
+            let packet_handler = |p: Icmpv6Packet,
+                                  s: SockAddr,
+                                  send_time: Instant,
+                                  seq: u16|
+             -> Option<()> {
+                // We only want to handle replies for the address we are pinging.
                 if let Some(addr) = s.as_inet6() {
                     if &dest != addr.ip() {
-                        return;
+                        return None;
                     }
                 } else {
-                    return;
+                    return None;
                 };
                 match p.message {
                     Icmpv6Message::Unreachable {
@@ -246,6 +270,7 @@ pub fn start_echo_loop(
                         // We ignore the rest.
                     }
                 }
+                Some(())
             };
             loop_impl(socket, dest, packet_handler, err_handler, stop_signal);
         }
