@@ -143,19 +143,11 @@ pub fn start_echo_loop(
             let mut socket = IcmpSocket4::try_from(Ipv4Addr::new(0, 0, 0, 0)).unwrap();
             socket.set_max_hops(MAXHOPS.flag as u32);
             let packet_handler = |p: Icmpv4Packet,
-                                  s: SockAddr,
+                                  _s: SockAddr,
                                   send_time: Instant,
                                   seq: u16|
              -> Option<()> {
                 // We only want to handle replies for the address we are pinging.
-                if let Some(addr) = s.as_inet() {
-                    if &dest != addr.ip() {
-                        info!("ICMP: Packet for wrong address: {}", addr.ip());
-                        return None;
-                    }
-                } else {
-                    return None;
-                };
                 match p.message {
                     Icmpv4Message::ParameterProblem {
                         pointer: _,
@@ -170,16 +162,14 @@ pub fn start_echo_loop(
                         padding: _,
                         header: _,
                     } => {
-                        // // If we got unreachable we need to set up a new sender.
-                        // error!("{:?}", r);
-                        // info!("Restarting our sender");
-                        info!("ICMP: Destination Unreachable {}", dest);
+                        info!(
+                            "ICMP: Destination Unreachable {} from {}",
+                            dest,
+                            _s.as_inet().unwrap().ip()
+                        );
                         ping_counter
                             .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name})
                             .inc();
-                        // let resolved = resolve_host_address(domain_name);
-                        // let mut new_sender = Ekko::with_target(&resolved).unwrap();
-                        //            std::mem::swap(&mut sender, &mut new_sender);
                     }
                     Icmpv4Message::TimeExceeded {
                         padding: _,
@@ -191,13 +181,17 @@ pub fn start_echo_loop(
                             .inc();
                     }
                     Icmpv4Message::EchoReply {
-                        identifier: _,
+                        identifier,
                         sequence,
                         payload: _,
                     } => {
+                        if identifier != 42 {
+                            info!("ICMP: Discarding wrong identifier {}", identifier);
+                            return None;
+                        }
                         if sequence != seq {
                             info!("ICMP: Discarding sequence {}", sequence);
-                            return Some(());
+                            return None;
                         }
                         let elapsed =
                             Instant::now().sub(send_time.clone()).as_micros() as f64 / 1000.00;
@@ -227,18 +221,10 @@ pub fn start_echo_loop(
             let mut socket = IcmpSocket6::try_from(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)).unwrap();
             socket.set_max_hops(MAXHOPS.flag as u32);
             let packet_handler = |p: Icmpv6Packet,
-                                  s: SockAddr,
+                                  _s: SockAddr,
                                   send_time: Instant,
                                   seq: u16|
              -> Option<()> {
-                // We only want to handle replies for the address we are pinging.
-                if let Some(addr) = s.as_inet6() {
-                    if &dest != addr.ip() {
-                        return None;
-                    }
-                } else {
-                    return None;
-                };
                 match p.message {
                     Icmpv6Message::Unreachable {
                         _unused,
@@ -257,13 +243,17 @@ pub fn start_echo_loop(
                         .inc();
                     }
                     Icmpv6Message::EchoReply {
-                        identifier: _,
+                        identifier,
                         sequence,
                         payload: _,
                     } => {
+                        if identifier != 42 {
+                            info!("ICMP: Discarding wrong identifier {}", identifier);
+                            return None;
+                        }
                         if sequence != seq {
                             info!("ICMP: Discarding sequence {}", sequence);
-                            return Some(());
+                            return None;
                         }
                         let elapsed =
                             Instant::now().sub(send_time.clone()).as_micros() as f64 / 1000.00;
