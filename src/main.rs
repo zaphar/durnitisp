@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::convert::Into;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::convert::Into;
 
 use gflags;
 use log::{debug, error, info};

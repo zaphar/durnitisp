@@ -16,10 +16,10 @@ use std::io;
 use std::net::IpAddr;
 use std::net::{SocketAddr, ToSocketAddrs};
 
+use gflags;
 use log::info;
 use resolve::config::DnsConfig;
-use resolve::resolver::{DnsResolver};
-use gflags;
+use resolve::resolver::DnsResolver;
 
 gflags::define! {
     /// Allow IPv6 addresses for domain name lookups.
