@@ -26,7 +26,7 @@ use icmp_socket::{
     IcmpSocket, IcmpSocket4, IcmpSocket6, Icmpv4Packet, Icmpv6Packet,
 };
 use log::{error, info};
-use prometheus::{CounterVec, IntGaugeVec};
+use prometheus::{CounterVec, GaugeVec};
 use socket2::{self, SockAddr};
 
 gflags::define! {
@@ -63,7 +63,7 @@ fn loop_impl<Sock, PH, EH>(
     stop_signal: Arc<RwLock<bool>>,
 ) where
     PH: Fn(Sock::PacketType, socket2::SockAddr, Instant, u16) -> Option<()>,
-    EH: Fn(std::io::Error) -> (),
+    EH: Fn(std::io::Error, bool) -> (),
     Sock: IcmpSocket,
     Sock::AddrType: std::fmt::Display + Copy,
     Sock::PacketType: WithEchoRequest<Packet = Sock::PacketType>,
@@ -85,23 +85,27 @@ fn loop_impl<Sock, PH, EH>(
         .unwrap();
         let send_time = Instant::now();
         if let Err(e) = socket.send_to(dest, packet) {
-            err_handler(e);
+            err_handler(e, true);
         } else {
             loop {
                 // Keep going until we get the packet we are looking for.
-                match socket.rcv_from() {
+                match socket.rcv_with_timeout(Duration::from_secs(1)) {
                     Err(e) => {
-                        err_handler(e);
+                        err_handler(e, false);
                     }
                     Ok((resp, sock_addr)) => {
                         if packet_handler(resp, sock_addr, send_time, sequence).is_some() {
+                            sequence = sequence.wrapping_add(1);
                             break;
                         }
                     }
                 }
+                // Give up after 3 seconds and send another packet.
+                if Instant::now() - send_time > Duration::from_secs(3) {
+                    break;
+                }
             }
         }
-        sequence += 1;
         std::thread::sleep(Duration::from_secs(3));
     }
 }
@@ -109,7 +113,7 @@ fn loop_impl<Sock, PH, EH>(
 pub fn start_echo_loop(
     domain_name: &str,
     stop_signal: Arc<RwLock<bool>>,
-    ping_latency_guage: IntGaugeVec,
+    ping_latency_guage: GaugeVec,
     ping_counter: CounterVec,
 ) {
     let resolved = resolve_host_address(domain_name);
@@ -121,14 +125,18 @@ pub fn start_echo_loop(
         .parse::<IpAddr>()
         .expect(&format!("Invalid IP Address {}", resolved));
 
-    let err_handler = |e: std::io::Error| {
-        ping_counter
-            .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
-            .inc();
-        error!(
-            "ICMP: error sending domain: {} and address: {} failed: {:?}, Trying again later",
-            domain_name, &dest, e
-        );
+    let err_handler = |e: std::io::Error, send: bool| {
+        if send {
+            error!(
+                "ICMP: error sending to domain: {} and address: {} failed: {:?}, Trying again later",
+                domain_name, &dest, e
+            );
+        } else {
+            error!(
+                "ICMP: error receiving for domain: {} and address: {} failed: {:?}, Trying again later",
+                domain_name, &dest, e
+            );
+        }
     };
     match dest {
         IpAddr::V4(dest) => {
@@ -191,7 +199,8 @@ pub fn start_echo_loop(
                             info!("ICMP: Discarding sequence {}", sequence);
                             return Some(());
                         }
-                        let elapsed = Instant::now().sub(send_time.clone()).as_millis();
+                        let elapsed =
+                            Instant::now().sub(send_time.clone()).as_micros() as f64 / 1000.00;
                         info!(
                             "ICMP: Reply from {}: time={}ms, seq={}",
                             dest, elapsed, sequence,
@@ -199,10 +208,10 @@ pub fn start_echo_loop(
                         ping_counter
                             .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
                             .inc();
-                        if elapsed != 0 {
+                        if elapsed as i32 != 0 {
                             ping_latency_guage
                                 .with(&prometheus::labels! {"domain" => domain_name})
-                                .set(elapsed as i64);
+                                .set(elapsed);
                         }
                     }
                     p => {
@@ -252,7 +261,16 @@ pub fn start_echo_loop(
                         sequence,
                         payload: _,
                     } => {
-                        let elapsed = Instant::now().sub(send_time.clone()).as_millis();
+                        if sequence != seq {
+                            info!("ICMP: Discarding sequence {}", sequence);
+                            return Some(());
+                        }
+                        let elapsed =
+                            Instant::now().sub(send_time.clone()).as_micros() as f64 / 1000.00;
+                        info!(
+                            "ICMP: Reply from {}: time={}ms, seq={}",
+                            dest, elapsed, sequence,
+                        );
                         info!(
                             "ICMP: Reply from {}: time={}ms, seq={}",
                             dest, elapsed, sequence,
@@ -260,10 +278,10 @@ pub fn start_echo_loop(
                         ping_counter
                             .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
                             .inc();
-                        if elapsed != 0 {
+                        if elapsed as i32 != 0 {
                             ping_latency_guage
                                 .with(&prometheus::labels! {"domain" => domain_name})
-                                .set(elapsed as i64);
+                                .set(elapsed);
                         }
                     }
                     _ => {

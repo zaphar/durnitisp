@@ -20,7 +20,7 @@ use gflags;
 use log::{debug, error, info};
 use nursery::thread;
 use nursery::{Nursery, Waitable};
-use prometheus;
+use prometheus::{self, GaugeVec};
 use prometheus::{CounterVec, Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
 use stderrlog;
 use tiny_http;
@@ -118,7 +118,7 @@ fn main() -> anyhow::Result<()> {
     )
     .unwrap();
     let ping_latency_vec =
-        IntGaugeVec::new(Opts::new("ping_latency", "ICMP Ping latency"), &["domain"]).unwrap();
+        GaugeVec::new(Opts::new("ping_latency", "ICMP Ping latency"), &["domain"]).unwrap();
     let ping_counter_vec = CounterVec::new(
         Opts::new("ping_counter", "Ping Request Counter"),
         &["result", "domain"],

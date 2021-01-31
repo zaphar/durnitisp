@@ -163,7 +163,7 @@ dependencies = [
 [[package]]
 name = "icmp-socket"
 version = "0.1.0"
-source = "git+https://github.com/zaphar/icmp-socket.git?branch=master#37f3651995fc608cfe40bde9e89649ac5ea72df6"
+source = "git+https://github.com/zaphar/icmp-socket.git?branch=master#42e39a621f2754328c4628c5acf8ade640f8911d"
 dependencies = [
  "byteorder",
  "socket2",
