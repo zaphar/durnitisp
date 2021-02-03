@@ -25,7 +25,7 @@ use icmp_socket::{
     packet::{Icmpv4Message, Icmpv6Message, WithEchoRequest},
     IcmpSocket, IcmpSocket4, IcmpSocket6, Icmpv4Packet, Icmpv6Packet,
 };
-use log::{error, info};
+use log::{debug, error, info};
 use prometheus::{CounterVec, GaugeVec};
 use socket2::{self, SockAddr};
 
@@ -126,6 +126,9 @@ pub fn start_echo_loop(
         .expect(&format!("Invalid IP Address {}", resolved));
 
     let err_handler = |e: std::io::Error, send: bool| {
+        ping_counter
+            .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
+            .inc();
         if send {
             error!(
                 "ICMP: error sending to domain: {} and address: {} failed: {:?}, Trying again later",
@@ -152,33 +155,46 @@ pub fn start_echo_loop(
                     Icmpv4Message::ParameterProblem {
                         pointer: _,
                         padding: _,
-                        header: _,
+                        header,
                     } => {
-                        ping_counter
-                            .with(&prometheus::labels! {"result" => "parameter_problem", "domain" => domain_name})
-                            .inc();
+                        let dest_addr =
+                            Ipv4Addr::new(header[16], header[17], header[18], header[19]);
+                        if dest_addr == dest {
+                            ping_counter
+                                .with(&prometheus::labels! {"result" => "parameter_problem", "domain" => domain_name})
+                                .inc();
+                        } else {
+                            return None;
+                        }
                     }
-                    Icmpv4Message::Unreachable {
-                        padding: _,
-                        header: _,
-                    } => {
-                        info!(
-                            "ICMP: Destination Unreachable {} from {}",
-                            dest,
-                            _s.as_inet().unwrap().ip()
-                        );
-                        ping_counter
-                            .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name})
-                            .inc();
+                    Icmpv4Message::Unreachable { padding: _, header } => {
+                        let dest_addr =
+                            Ipv4Addr::new(header[16], header[17], header[18], header[19]);
+                        if dest_addr == dest {
+                            info!(
+                                "ICMP: Destination: {:?} Unreachable {} response from {}",
+                                dest_addr,
+                                dest,
+                                _s.as_inet().unwrap().ip()
+                            );
+                            ping_counter
+                                .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name})
+                                .inc();
+                        } else {
+                            return None;
+                        }
                     }
-                    Icmpv4Message::TimeExceeded {
-                        padding: _,
-                        header: _,
-                    } => {
-                        info!("ICMP: Timeout for {}", dest);
-                        ping_counter
-                            .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
-                            .inc();
+                    Icmpv4Message::TimeExceeded { padding: _, header } => {
+                        let dest_addr =
+                            Ipv4Addr::new(header[16], header[17], header[18], header[19]);
+                        if dest_addr == dest {
+                            info!("ICMP: Timeout for {}", dest);
+                            ping_counter
+                                .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
+                                .inc();
+                        } else {
+                            return None;
+                        }
                     }
                     Icmpv4Message::EchoReply {
                         identifier,
@@ -190,7 +206,10 @@ pub fn start_echo_loop(
                             return None;
                         }
                         if sequence != seq {
-                            info!("ICMP: Discarding sequence {}", sequence);
+                            info!(
+                                "ICMP: Discarding sequence {}, expected sequence {}",
+                                sequence, seq
+                            );
                             return None;
                         }
                         let elapsed =
