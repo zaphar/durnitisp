@@ -25,7 +25,7 @@ use icmp_socket::{
     packet::{Icmpv4Message, Icmpv6Message, WithEchoRequest},
     IcmpSocket, IcmpSocket4, IcmpSocket6, Icmpv4Packet, Icmpv6Packet,
 };
-use log::{debug, error, info};
+use log::{error, info};
 use prometheus::{CounterVec, GaugeVec};
 use socket2::{self, SockAddr};
 
@@ -206,7 +206,7 @@ pub fn start_echo_loop(
                             return None;
                         }
                         if sequence != seq {
-                            info!(
+                            error!(
                                 "ICMP: Discarding sequence {}, expected sequence {}",
                                 sequence, seq
                             );
@@ -230,6 +230,7 @@ pub fn start_echo_loop(
                     p => {
                         // We ignore the rest.
                         info!("ICMP Unhandled packet {:?}", p);
+                        return None;
                     }
                 }
                 Some(())
@@ -247,19 +248,69 @@ pub fn start_echo_loop(
                 match p.message {
                     Icmpv6Message::Unreachable {
                         _unused,
-                        invoking_packet: _,
+                        invoking_packet,
                     } => {
-                        ping_counter
-                        .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name})
-                        .inc();
+                        match Icmpv6Packet::parse(&invoking_packet) {
+                            Ok(Icmpv6Packet {
+                                typ: _,
+                                code: _,
+                                checksum: _,
+                                message:
+                                    Icmpv6Message::EchoRequest {
+                                        identifier,
+                                        sequence: _,
+                                        payload: _,
+                                    },
+                            }) => {
+                                if identifier == 42 {
+                                    ping_counter
+                                    .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name})
+                                    .inc();
+                                    return Some(());
+                                }
+                            }
+                            Err(e) => {
+                                // We ignore these as well but log it.
+                                error!("ICMP: Error parsing Unreachable invoking packet {:?}", e);
+                            }
+                            _ => {
+                                // We ignore these
+                            }
+                        };
+                        return None;
                     }
                     Icmpv6Message::ParameterProblem {
                         pointer: _,
-                        invoking_packet: _,
+                        invoking_packet,
                     } => {
-                        ping_counter
-                        .with(&prometheus::labels! {"result" => "parameter_problem", "domain" => domain_name})
-                        .inc();
+                        match Icmpv6Packet::parse(&invoking_packet) {
+                            Ok(Icmpv6Packet {
+                                typ: _,
+                                code: _,
+                                checksum: _,
+                                message:
+                                    Icmpv6Message::EchoRequest {
+                                        identifier,
+                                        sequence: _,
+                                        payload: _,
+                                    },
+                            }) => {
+                                if identifier == 42 {
+                                    ping_counter
+                                    .with(&prometheus::labels! {"result" => "parameter_problem", "domain" => domain_name})
+                                    .inc();
+                                    return Some(());
+                                }
+                            }
+                            Err(e) => {
+                                // We ignore these as well but log it.
+                                error!("ICMP: Error parsing Unreachable invoking packet {:?}", e);
+                            }
+                            _ => {
+                                // We ignore these
+                            }
+                        }
+                        return None;
                     }
                     Icmpv6Message::EchoReply {
                         identifier,
@@ -271,7 +322,7 @@ pub fn start_echo_loop(
                             return None;
                         }
                         if sequence != seq {
-                            info!("ICMP: Discarding sequence {}", sequence);
+                            error!("ICMP: Discarding sequence {}", sequence);
                             return None;
                         }
                         let elapsed =
@@ -295,6 +346,7 @@ pub fn start_echo_loop(
                     }
                     _ => {
                         // We ignore the rest.
+                        return None;
                     }
                 }
                 Some(())
