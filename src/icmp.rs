@@ -68,6 +68,13 @@ fn loop_impl<Sock, PH, EH>(
     Sock::AddrType: std::fmt::Display + Copy,
     Sock::PacketType: WithEchoRequest<Packet = Sock::PacketType>,
 {
+    if let Err(e) = socket.set_timeout(Duration::from_secs(1)) {
+        error!(
+            "ICMP: Failed to set timeout on socket. Not starting thread. {:?}",
+            e
+        );
+        return;
+    }
     let mut sequence: u16 = 0;
     loop {
         {
@@ -89,7 +96,7 @@ fn loop_impl<Sock, PH, EH>(
         } else {
             loop {
                 // Keep going until we get the packet we are looking for.
-                match socket.rcv_with_timeout(Duration::from_secs(1)) {
+                match socket.rcv_from() {
                     Err(e) => {
                         err_handler(e, false);
                     }
