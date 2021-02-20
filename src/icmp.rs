@@ -11,14 +11,11 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Sub;
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
-};
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    sync::{Arc, RwLock},
 };
 
 use crate::util;
@@ -68,7 +65,6 @@ struct State<AddrType> {
     time_tracker: HashMap<u16, Instant>,
     latency_guage: GaugeVec,
     ping_counter: CounterVec,
-    stop_signal: Arc<RwLock<bool>>,
 }
 
 struct PingerImpl<Sock: IcmpSocket> {
@@ -311,12 +307,6 @@ where
                     state.time_tracker.insert(identifier, send_time);
                 }
             }
-            {
-                // Scope the lock really tightly
-                if *state.stop_signal.read().unwrap() {
-                    return Ok(());
-                }
-            }
         }
         Ok(())
     }
@@ -364,12 +354,6 @@ where
                             .inc();
                     }
                 }
-                {
-                    // Scope the lock really tightly.
-                    if *handler.get_mut_state().stop_signal.read().unwrap() {
-                        return;
-                    }
-                }
             }
         }
         let mut state = handler.get_mut_state();
@@ -379,7 +363,6 @@ where
 
 pub fn start_echo_loop(
     domain_names: &Vec<&str>,
-    stop_signal: Arc<RwLock<bool>>,
     ping_latency_guage: GaugeVec,
     ping_counter: CounterVec,
 ) {
@@ -419,7 +402,6 @@ pub fn start_echo_loop(
         time_tracker: HashMap::new(),
         latency_guage: ping_latency_guage.clone(),
         ping_counter: ping_counter.clone(),
-        stop_signal: stop_signal.clone(),
     };
     let mut v6_destinations = HashMap::new();
     let mut v6_id_counter = 42;
@@ -438,7 +420,6 @@ pub fn start_echo_loop(
         time_tracker: HashMap::new(),
         latency_guage: ping_latency_guage,
         ping_counter,
-        stop_signal: stop_signal.clone(),
     };
     let mut v6_pinger = PingerImpl {
         sock: IcmpSocket6::new().expect("Failed to open Icmpv6 Socket"),
@@ -453,12 +434,6 @@ pub fn start_echo_loop(
             .expect("Error sending packets on socket");
         v4_pinger.recv_all(&mut v4_state);
         v6_pinger.recv_all(&mut v6_state);
-        {
-            // Scope the lock really tightly
-            if *stop_signal.read().unwrap() {
-                return;
-            }
-        }
         std::thread::sleep(Duration::from_secs(PINGDELAY.flag))
     }
 }

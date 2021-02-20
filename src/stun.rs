@@ -18,8 +18,6 @@ use prometheus::{CounterVec, IntGaugeVec};
 use std::convert::From;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::Arc;
-use std::sync::RwLock;
 use std::time::SystemTime;
 
 gflags::define! {
@@ -74,7 +72,6 @@ fn attempt_stun_connect(addr: SocketAddr) -> Result<SystemTime, ConnectError> {
 
 pub fn start_listen_thread(
     domain_name: &str,
-    stop_signal: Arc<RwLock<bool>>,
     s: SocketAddr,
     stun_counter_vec_copy: CounterVec,
     stun_latency_vec_copy: IntGaugeVec,
@@ -82,13 +79,6 @@ pub fn start_listen_thread(
 ) {
     debug!("started thread for {}", domain_name);
     loop {
-        {
-            // Limit the scope of this lock
-            if *stop_signal.read().unwrap() {
-                info!("Stopping stun thread for {}", domain_name);
-                return;
-            }
-        }
         let now = SystemTime::now();
         info!("Attempting to connect to {}", domain_name);
         match attempt_stun_connect(s) {

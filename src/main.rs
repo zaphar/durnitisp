@@ -14,7 +14,6 @@
 
 use std::convert::Into;
 use std::sync::Arc;
-use std::sync::RwLock;
 
 use gflags;
 use log::{debug, error, info};
@@ -49,22 +48,14 @@ gflags::define! {
     --pingHosts = "google.com"
 }
 
+gflags::define! {
+    /// Comma separated list of hosts to ping
+    --stunHosts = "stun.l.google.com:19302,stun.ekiga.net:3478,stun.xten.com:3478,stun.ideasip.com:3478,stun.rixtelecom.se:3478,stun.schlund.de:3478,stun.softjoys.com:3478,stun.stunprotocol.org:3478,stun.voiparound.com:3478,stun.voipbuster.com:3478,stun.voipstunt.com:3478,stun1.noc.ams-ix.net:3478"
+}
+
 fn main() -> anyhow::Result<()> {
-    let default_stun_servers: Vec<&'static str> = vec![
-        "stun.l.google.com:19302",
-        "stun.ekiga.net:3478",
-        "stun.xten.com:3478",
-        "stun.ideasip.com:3478",
-        "stun.rixtelecom.se:3478",
-        "stun.schlund.de:3478",
-        "stun.softjoys.com:3478",
-        "stun.stunprotocol.org:3478",
-        "stun.voiparound.com:3478",
-        "stun.voipbuster.com:3478",
-        "stun.voipstunt.com:3478",
-        "stun1.noc.ams-ix.net:3478",
-    ];
-    let mut stun_servers = gflags::parse();
+    gflags::parse();
+    let stun_servers: Vec<&str> = dbg!(STUNHOSTS.flag).split(",").collect();
 
     if HELP.flag {
         println!("durnitisp <options> <list of hostname:port>");
@@ -87,13 +78,9 @@ fn main() -> anyhow::Result<()> {
         .timestamp(stderrlog::Timestamp::Millisecond)
         .init()?;
 
-    if stun_servers.is_empty() {
-        stun_servers = default_stun_servers;
-    }
-    // FIXME(jwall): allow them to override ping hosts
-    let ping_hosts: Vec<&str> = PINGHOSTS.flag.split(",").collect();
-    let stop_signal = Arc::new(RwLock::new(false));
+    let ping_hosts: Vec<&str> = dbg!(PINGHOSTS.flag).split(",").collect();
 
+    dbg!(&ping_hosts);
     // Create a Registry and register metrics.
     let r = Registry::new();
     let stun_counter_vec = CounterVec::new(
@@ -142,15 +129,12 @@ fn main() -> anyhow::Result<()> {
     // First we start the render thread.
     {
         // Introduce a new scope for our Arc to clone before moving it into the thread.
-        let stop_signal = stop_signal.clone();
         // thread::Handle starts the thread immediately so the render thread will usually start first.
         let render_thread = thread::Handle::new(move || {
             debug!("attempting to start server on {}", LISTENHOST.flag);
             let server = match tiny_http::Server::http(LISTENHOST.flag) {
                 Ok(server) => server,
                 Err(err) => {
-                    let mut signal = stop_signal.write().unwrap();
-                    *signal = true;
                     error!("Error starting render thread {}", err);
                     error!("Shutting down all threads...");
                     std::process::exit(1);
@@ -181,16 +165,10 @@ fn main() -> anyhow::Result<()> {
         parent.adopt(Box::new(render_thread));
     }
     {
-        let stop_signal = stop_signal.clone();
         let ping_latency_vec = ping_latency_vec.clone();
         let ping_counter_vec = ping_counter_vec.clone();
         let ping_thread = thread::Pending::new(move || {
-            icmp::start_echo_loop(
-                &ping_hosts,
-                stop_signal.clone(),
-                ping_latency_vec,
-                ping_counter_vec,
-            );
+            icmp::start_echo_loop(&ping_hosts, ping_latency_vec, ping_counter_vec);
         });
         parent.schedule(Box::new(ping_thread));
     }
@@ -202,11 +180,9 @@ fn main() -> anyhow::Result<()> {
         let stun_success_vec_copy = stun_success_vec.clone();
         if let Some(s) = s.clone() {
             let domain_name = *stun_servers_copy.get(i).unwrap();
-            let stop_signal = stop_signal.clone();
             let connect_thread = thread::Pending::new(move || {
                 stun::start_listen_thread(
                     domain_name,
-                    stop_signal,
                     s.into(),
                     stun_counter_vec_copy,
                     stun_latency_vec_copy,
