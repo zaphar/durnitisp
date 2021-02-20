@@ -180,13 +180,17 @@ fn main() -> anyhow::Result<()> {
         });
         parent.adopt(Box::new(render_thread));
     }
-    for domain_name in ping_hosts.iter().cloned() {
-        // TODO(Prometheus stats)
+    {
         let stop_signal = stop_signal.clone();
         let ping_latency_vec = ping_latency_vec.clone();
         let ping_counter_vec = ping_counter_vec.clone();
         let ping_thread = thread::Pending::new(move || {
-            icmp::start_echo_loop(domain_name, stop_signal, ping_latency_vec, ping_counter_vec);
+            icmp::start_echo_loop(
+                &ping_hosts,
+                stop_signal.clone(),
+                ping_latency_vec,
+                ping_counter_vec,
+            );
         });
         parent.schedule(Box::new(ping_thread));
     }
