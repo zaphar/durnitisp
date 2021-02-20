@@ -1,6 +1,6 @@
 [package]
 name = "durnitisp"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Jeremy Wall <jeremy@marzhillstudios.com>"]
 edition = "2018"
 
