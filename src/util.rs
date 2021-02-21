@@ -32,9 +32,16 @@ pub fn resolve_hosts<'a>(servers: &'a Vec<&str>) -> io::Result<Vec<Option<IpAddr
     config.use_inet6 = ALLOWIPV6.flag;
     let resolver = DnsResolver::new(config)?;
     for name in servers.iter().cloned() {
-        // TODO for resolution errors return a more valid error with the domain name.
-        let mut iter = resolver.resolve_host(name)?;
-        results.push(iter.next());
+        match name.parse::<IpAddr>() {
+            Ok(ip) => {
+                results.push(Some(ip));
+            }
+            Err(_) => {
+                // TODO for resolution errors return a more valid error with the domain name.
+                let mut iter = resolver.resolve_host(name)?;
+                results.push(iter.next());
+            }
+        }
     }
     return Ok(results);
 }
