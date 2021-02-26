@@ -55,7 +55,7 @@ gflags::define! {
 
 fn main() -> anyhow::Result<()> {
     gflags::parse();
-    let stun_servers: Vec<&str> = dbg!(STUNHOSTS.flag).split(",").collect();
+    let stun_servers: Vec<&str> = STUNHOSTS.flag.split(",").collect();
 
     if HELP.flag {
         println!("durnitisp <options> <list of hostname:port>");
@@ -78,9 +78,8 @@ fn main() -> anyhow::Result<()> {
         .timestamp(stderrlog::Timestamp::Millisecond)
         .init()?;
 
-    let ping_hosts: Vec<&str> = dbg!(PINGHOSTS.flag).split(",").collect();
+    let ping_hosts: Vec<&str> = PINGHOSTS.flag.split(",").collect();
 
-    dbg!(&ping_hosts);
     // Create a Registry and register metrics.
     let r = Registry::new();
     let stun_counter_vec = CounterVec::new(
@@ -167,10 +166,7 @@ fn main() -> anyhow::Result<()> {
     {
         let ping_latency_vec = ping_latency_vec.clone();
         let ping_counter_vec = ping_counter_vec.clone();
-        let ping_thread = thread::Pending::new(move || {
-            icmp::start_echo_loop(&ping_hosts, ping_latency_vec, ping_counter_vec);
-        });
-        parent.schedule(Box::new(ping_thread));
+        icmp::schedule_echo_server(&ping_hosts, ping_latency_vec, ping_counter_vec, &mut parent);
     }
     // Then we attempt to start connections to each stun server.
     for (i, s) in stun_socket_addrs.iter().enumerate() {
