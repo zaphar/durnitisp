@@ -70,7 +70,6 @@ struct State<AddrType> {
 
 struct PingerImpl<Sock: IcmpSocket> {
     sock: Sock,
-    timeout: Duration,
 }
 
 trait PacketHandler<PacketType, AddrType>
@@ -399,9 +398,7 @@ where
             debug!("Nothing to recieve for so skipping for this socket");
             return;
         }
-        self.sock
-            .set_timeout(self.timeout)
-            .expect("Unable to set timout for recieves on socket.");
+        self.sock.set_timeout(None);
         let loop_start_time = Instant::now();
         loop {
             // Receive loop
@@ -515,7 +512,6 @@ pub fn schedule_echo_server(
     }
     let v4_pinger = PingerImpl {
         sock: IcmpSocket4::new().expect("Failed to open Icmpv4 Socket"),
-        timeout: Duration::from_millis(10),
     };
     let v6_state = State {
         destinations: v6_destinations,
@@ -525,7 +521,6 @@ pub fn schedule_echo_server(
     };
     let v6_pinger = PingerImpl {
         sock: IcmpSocket6::new().expect("Failed to open Icmpv6 Socket"),
-        timeout: Duration::from_millis(10),
     };
     let multi = std::sync::Arc::new(std::sync::Mutex::new(Multi {
         v4_pinger,
