@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use gflags;
-use log::{debug, error, info};
 use prometheus::{CounterVec, IntGaugeVec};
 use std::convert::From;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::SystemTime;
+use tracing::{debug, error, info, instrument};
 
 gflags::define! {
     /// Read timeout for the stun server udp receive
@@ -70,6 +70,11 @@ fn attempt_stun_connect(addr: SocketAddr) -> Result<SystemTime, ConnectError> {
     Ok(SystemTime::now())
 }
 
+#[instrument(
+    name = "STUN",
+    fields(domain=domain_name, socket=%s),
+    skip(stun_counter_vec_copy, stun_latency_vec_copy, stun_success_vec_copy)
+)]
 pub fn start_listen_thread(
     domain_name: &str,
     s: SocketAddr,
@@ -77,13 +82,18 @@ pub fn start_listen_thread(
     stun_latency_vec_copy: IntGaugeVec,
     stun_success_vec_copy: IntGaugeVec,
 ) {
-    debug!("started thread for {}", domain_name);
+    debug!("starting thread");
     loop {
         let now = SystemTime::now();
-        info!("Attempting to connect to {}", domain_name);
+        info!("Attempting to connect");
         match attempt_stun_connect(s) {
             Ok(finish_time) => {
-                info!("Success! connecting to {}", domain_name);
+                info!(
+                    timeout = false,
+                    success = true,
+                    millis = finish_time.duration_since(now).unwrap().as_millis(),
+                    conn_type = "Stun connection",
+                );
                 stun_counter_vec_copy
                     .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
                     .inc();
@@ -97,9 +107,10 @@ pub fn start_listen_thread(
             }
             Err(ConnectError::Timeout(finish_time)) => {
                 info!(
-                    "Stun connection to {} timedout after {} millis",
-                    domain_name,
-                    finish_time.duration_since(now).unwrap().as_millis()
+                    timeout = true,
+                    success = false,
+                    millis = finish_time.duration_since(now).unwrap().as_millis(),
+                    conn_type = "Stun connection",
                 );
                 stun_counter_vec_copy
                     .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
@@ -109,7 +120,10 @@ pub fn start_listen_thread(
                     .set(0);
             }
             Err(ConnectError::Err(e)) => {
-                error!("Error connecting to {}: {}", domain_name, e);
+                error!(
+                    timeout=true, success=false, err = ?e,
+                    conn_type="Stun connection",
+                );
                 stun_counter_vec_copy
                     .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
                     .inc();
@@ -118,7 +132,12 @@ pub fn start_listen_thread(
                     .set(0);
             }
             Err(ConnectError::Incomplete) => {
-                error!("Connection to {} was incomplete", domain_name);
+                error!(
+                    timeout = true,
+                    success = false,
+                    err = "Incomplete",
+                    conn_type = "Stun connection",
+                );
                 stun_counter_vec_copy
                     .with(&prometheus::labels! {"result" => "incomplete", "domain" => domain_name})
                     .inc();

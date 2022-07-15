@@ -25,9 +25,9 @@ use icmp_socket::{
     packet::{Icmpv4Message, Icmpv6Message, WithEchoRequest},
     IcmpSocket, IcmpSocket4, IcmpSocket6, Icmpv4Packet, Icmpv6Packet,
 };
-use log::{debug, error, info};
 use nursery::{thread, Nursery};
 use prometheus::{CounterVec, GaugeVec};
+use tracing::{debug, error, info, instrument, warn};
 
 gflags::define! {
     /// The payload to use for the ping requests.
@@ -87,8 +87,9 @@ impl<'a> PacketHandler<Icmpv6Packet, Ipv6Addr> for &'a mut State<Ipv6Addr> {
         return self;
     }
 
+    #[instrument(level = "debug", skip(self))]
     fn handle_pkt(&mut self, pkt: Icmpv6Packet) -> bool {
-        debug!("ICMP: handling packet {:?}", pkt);
+        debug!("handling packet");
         match pkt.message {
             Icmpv6Message::Unreachable {
                 _unused,
@@ -115,7 +116,7 @@ impl<'a> PacketHandler<Icmpv6Packet, Ipv6Addr> for &'a mut State<Ipv6Addr> {
                     }
                     Err(e) => {
                         // We ignore these as well but log it.
-                        error!("ICMP: Error parsing Unreachable invoking packet {:?}", e);
+                        error!(err = ?e, "Error parsing Unreachable");
                     }
                     _ => {
                         // We ignore these
@@ -147,7 +148,7 @@ impl<'a> PacketHandler<Icmpv6Packet, Ipv6Addr> for &'a mut State<Ipv6Addr> {
                     }
                     Err(e) => {
                         // We ignore these as well but log it.
-                        error!("ICMP: Error parsing Unreachable invoking packet {:?}", e);
+                        error!(err = ?e, "Error parsing ParameterProblem");
                     }
                     _ => {
                         // We ignore these
@@ -169,16 +170,20 @@ impl<'a> PacketHandler<Icmpv6Packet, Ipv6Addr> for &'a mut State<Ipv6Addr> {
                         let expected_sequence = *expected_sequence;
                         if sequence != expected_sequence {
                             error!(
-                                "ICMP: Discarding unexpected sequence sequence={} expected={}",
-                                sequence, expected_sequence
+                                sequence,
+                                expected = expected_sequence,
+                                "Discarding unexpected sequence",
                             );
                             self.time_tracker
                                 .insert(identifier, (None, expected_sequence.wrapping_add(1)));
                             return false;
                         }
                         info!(
-                            "ICMP: Reply from {}({}): time={}ms, seq={}",
-                            domain_name, dest, elapsed, sequence,
+                            domain=domain_name,
+                            %dest,
+                            time = elapsed,
+                            seq = sequence,
+                            "Reply",
                         );
                         self.ping_counter
                             .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
@@ -195,7 +200,7 @@ impl<'a> PacketHandler<Icmpv6Packet, Ipv6Addr> for &'a mut State<Ipv6Addr> {
                         return false;
                     };
                 } else {
-                    info!("ICMP: Discarding wrong identifier {}", identifier);
+                    warn!(identifier, "Discarding wrong identifier");
                 }
             }
             _ => {
@@ -211,8 +216,9 @@ impl<'a> PacketHandler<Icmpv4Packet, Ipv4Addr> for &'a mut State<Ipv4Addr> {
         return self;
     }
 
+    #[instrument(level = "debug", skip(self))]
     fn handle_pkt(&mut self, pkt: Icmpv4Packet) -> bool {
-        debug!("ICMP: handling packet {:?}", pkt);
+        debug!("handling packet");
         match pkt.message {
             Icmpv4Message::EchoReply {
                 identifier,
@@ -228,17 +234,15 @@ impl<'a> PacketHandler<Icmpv4Packet, Ipv4Addr> for &'a mut State<Ipv4Addr> {
                         let expected_sequence = *expected_sequence;
                         if expected_sequence != sequence {
                             error!(
-                                "ICMP: Discarding unexpected sequence sequence={} expected={}",
-                                sequence, expected_sequence
+                                sequence,
+                                expected = expected_sequence,
+                                "Discarding unexpected sequence",
                             );
                             self.time_tracker
                                 .insert(identifier, (None, expected_sequence.wrapping_add(1)));
                             return false;
                         }
-                        info!(
-                            "ICMP: Reply from {}({}): time={}ms, seq={}",
-                            domain_name, dest, elapsed, sequence,
-                        );
+                        info!(domain=domain_name, %dest, time = elapsed, seq = sequence, "Reply",);
                         self.ping_counter
                             .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
                             .inc();
@@ -252,12 +256,12 @@ impl<'a> PacketHandler<Icmpv4Packet, Ipv4Addr> for &'a mut State<Ipv4Addr> {
                         return false;
                     };
                 } else {
-                    info!("ICMP: Discarding wrong identifier {}", identifier);
+                    info!(identifier, "Discarding wrong identifier");
                 }
             }
-            p => {
+            _ => {
                 // We ignore the rest.
-                info!("ICMP Unhandled packet {:?}", p);
+                info!("Unhandled packet");
             }
         }
         return false;
@@ -287,9 +291,10 @@ where
     Sock::AddrType: std::fmt::Display + Copy,
     Sock::PacketType: WithEchoRequest<Packet = Sock::PacketType>,
 {
+    #[instrument(skip(self, state))]
     fn send_all(&mut self, state: &mut State<Sock::AddrType>) -> std::io::Result<()> {
         let destinations = state.destinations.clone();
-        info!("ICMP: Attempting to send packets for all domains");
+        debug!("Attempting to send packets for all domains");
         for (identifier, (domain_name, dest)) in destinations.into_iter() {
             let previous_tracker = state.time_tracker.get(&identifier);
             let sequence = if previous_tracker.is_some() {
@@ -300,8 +305,11 @@ where
                     let elapsed = Instant::now() - *send_time;
                     if elapsed > Duration::from_secs(PINGTIMEOUT.flag) {
                         info!(
-                            "ICMP: Dropped packet detected for domain_name={} send_time={:?} elapsed={:?} sequence={}",
-                            domain_name, send_time, elapsed, sequence
+                            domain = domain_name,
+                            ?send_time,
+                            ?elapsed,
+                            seq = sequence,
+                            "Dropped packet detected",
                         );
                         state.ping_counter
                             .with(&prometheus::labels! {"result" => "dropped", "domain" => &domain_name})
@@ -309,8 +317,9 @@ where
                         sequence.wrapping_add(1)
                     } else {
                         debug!(
-                            "ICMP: Waiting for timeout before sending next packet domain_name={} sequence={}",
-                            domain_name, sequence
+                            domain = domain_name,
+                            seq = sequence,
+                            "Waiting for timeout before sending next packet",
                         );
                         continue;
                     }
@@ -319,14 +328,15 @@ where
                 }
             } else {
                 debug!(
-                    "ICMP: Initializing sequence for first send domain_name={} sequence=0",
-                    domain_name
+                    domain = domain_name,
+                    seq = 0 as u16,
+                    "Initializing sequence for first send",
                 );
                 0
             };
-            info!(
-                "ICMP: sending echo request to {}({}) sequence={}",
-                domain_name, dest, sequence
+            debug!(
+                domain=domain_name, %dest, sequence,
+                "Sending echo request",
             );
             match self.send_to_destination(dest, identifier, sequence) {
                 Err(e) => {
@@ -335,9 +345,9 @@ where
                         .with(&prometheus::labels! {"result" => "err", "type" => "send"})
                         .inc();
                     error!(
-                            "ICMP: error sending to domain: {} and address: {} failed: {:?}, Trying again later",
-                            domain_name, &dest, e
-                        );
+                        domain=domain_name, %dest, err=?e,
+                        "Error sending. Trying again later",
+                    );
                 }
                 Ok(send_time) => {
                     state
@@ -346,7 +356,7 @@ where
                 }
             }
         }
-        debug!("ICMP: finished sending for domains");
+        debug!("Finished sending for domains");
         Ok(())
     }
 
@@ -372,6 +382,7 @@ where
         Ok(response)
     }
 
+    #[instrument(skip(self, handler))]
     fn recv_all<H: PacketHandler<Sock::PacketType, Sock::AddrType>>(&mut self, mut handler: H) {
         if handler.get_mut_state().destinations.is_empty() {
             debug!("Nothing to send to so skipping for this socket");
@@ -394,17 +405,17 @@ where
         let loop_start_time = Instant::now();
         loop {
             // Receive loop
-            debug!("ICMP: Attempting to recieve packets on socket");
+            debug!("Attempting to recieve packets on socket");
             match self.recv_pkt() {
                 Ok(pkt) => {
                     if handler.handle_pkt(pkt) {
                         // break out of the recv loop
-                        debug!("ICMP: Recieved Packet");
+                        debug!("Recieved Packet");
                         return;
                     }
                 }
                 Err(e) => {
-                    error!("ICMP: Error receiving packet: {:?}", e);
+                    error!(err = ?e, "Error receiving packet");
                     handler
                         .get_mut_state()
                         .ping_counter
@@ -414,7 +425,7 @@ where
                 }
             }
             if (Instant::now() - loop_start_time) > Duration::from_secs(PINGTIMEOUT.flag) {
-                info!("ICMP: Timing out on recieve loop");
+                info!("Timing out on recieve loop");
                 return;
             }
         }
@@ -444,6 +455,7 @@ impl Multi {
     }
 }
 
+#[instrument(name = "ICMP", skip_all)]
 pub fn schedule_echo_server(
     domain_names: &Vec<&str>,
     ping_latency_guage: GaugeVec,
@@ -476,7 +488,11 @@ pub fn schedule_echo_server(
     let mut v4_destinations = HashMap::new();
     let mut v4_id_counter = 42;
     for target in v4_targets {
-        info!("ICMP: Attempting ping to {}({})", target.0, target.1);
+        info!(
+            domain_name = target.0,
+            address = %target.1,
+            "Attempting ping"
+        );
         v4_destinations.insert(v4_id_counter, target.clone());
         v4_id_counter += 1;
     }
@@ -489,7 +505,11 @@ pub fn schedule_echo_server(
     let mut v6_destinations = HashMap::new();
     let mut v6_id_counter = 42;
     for target in v6_targets {
-        info!("ICMP: Attempting ping to {}({})", target.0, target.1);
+        info!(
+            domain_name = target.0,
+            address = %target.1,
+            "Attempting ping"
+        );
         v6_destinations.insert(v6_id_counter, target.clone());
         v6_id_counter += 1;
     }
@@ -515,7 +535,7 @@ pub fn schedule_echo_server(
     }));
     let send_multi = multi.clone();
     let send_thread = thread::Pending::new(move || {
-        info!("ICMP: Starrting send thread");
+        info!("Starting send thread");
         loop {
             {
                 send_multi.lock().unwrap().send_all();
@@ -524,7 +544,7 @@ pub fn schedule_echo_server(
         }
     });
     let recv_thread = thread::Pending::new(move || {
-        info!("ICMP: Starrting recv thread");
+        info!("Starting recv thread");
         loop {
             {
                 multi.lock().unwrap().recv_all();

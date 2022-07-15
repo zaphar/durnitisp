@@ -17,9 +17,9 @@ use std::net::IpAddr;
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use gflags;
-use log::info;
 use resolve::config::DnsConfig;
 use resolve::resolver::DnsResolver;
+use tracing::{error, instrument};
 
 gflags::define! {
     /// Allow IPv6 addresses for domain name lookups.
@@ -46,6 +46,7 @@ pub fn resolve_hosts<'a>(servers: &'a Vec<&str>) -> io::Result<Vec<Option<IpAddr
     return Ok(results);
 }
 
+#[instrument]
 pub fn resolve_socket_addrs<'a>(servers: &'a Vec<&str>) -> io::Result<Vec<Option<SocketAddr>>> {
     let mut results = Vec::new();
     for name in servers.iter().cloned() {
@@ -53,7 +54,7 @@ pub fn resolve_socket_addrs<'a>(servers: &'a Vec<&str>) -> io::Result<Vec<Option
         match name.to_socket_addrs() {
             Ok(addr) => results.push(addr.into_iter().next()),
             Err(e) => {
-                info!("Failed to resolve {} with error {}", name, e);
+                error!(name, err = ?e, "Failed to resolve");
                 results.push(None);
             }
         }

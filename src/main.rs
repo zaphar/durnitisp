@@ -11,18 +11,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 use std::convert::Into;
 use std::sync::Arc;
 
 use gflags;
-use log::{debug, error, info};
 use nursery::thread;
 use nursery::{Nursery, Waitable};
 use prometheus::{self, GaugeVec};
 use prometheus::{CounterVec, Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
-use stderrlog;
 use tiny_http;
+use tracing::{debug, error, info, instrument, Level};
+use tracing_subscriber::FmtSubscriber;
 
 mod icmp;
 mod stun;
@@ -44,6 +43,11 @@ gflags::define! {
 }
 
 gflags::define! {
+    /// Enable trace logging
+    --trace = false
+}
+
+gflags::define! {
     /// Comma separated list of hosts to ping
     --pingHosts = "google.com"
 }
@@ -53,6 +57,7 @@ gflags::define! {
     --stunHosts = "stun.l.google.com:19302,stun.ekiga.net:3478,stun.xten.com:3478,stun.ideasip.com:3478,stun.rixtelecom.se:3478,stun.schlund.de:3478,stun.softjoys.com:3478,stun.stunprotocol.org:3478,stun.voiparound.com:3478,stun.voipbuster.com:3478,stun.voipstunt.com:3478,stun1.noc.ams-ix.net:3478"
 }
 
+#[instrument]
 fn main() -> anyhow::Result<()> {
     gflags::parse();
     let stun_servers: Vec<&str> = STUNHOSTS.flag.split(",").collect();
@@ -67,16 +72,24 @@ fn main() -> anyhow::Result<()> {
         gflags::print_help_and_exit(0);
     }
 
-    let level = if DEBUG.flag || cfg!(debug_assertions) {
-        3
+    let subscriber_builder = if DEBUG.flag {
+        FmtSubscriber::builder()
+            // all spans/events with a level higher than debug
+            // will be written to stdout.
+            .with_max_level(Level::DEBUG)
+    } else if TRACE.flag {
+        FmtSubscriber::builder()
+            // all spans/events with a level will be written to stdout.
+            .with_max_level(Level::TRACE)
     } else {
-        2
+        FmtSubscriber::builder()
+            // all spans/events with a level higher than info (e.g, error, info, warn, etc.)
+            // will be written to stdout.
+            .with_max_level(Level::INFO)
     };
 
-    stderrlog::new()
-        .verbosity(level)
-        .timestamp(stderrlog::Timestamp::Millisecond)
-        .init()?;
+    tracing::subscriber::set_global_default(subscriber_builder.finish())
+        .expect("setting default subscriber failed");
 
     let ping_hosts: Vec<&str> = PINGHOSTS.flag.split(",").collect();
 
@@ -130,16 +143,21 @@ fn main() -> anyhow::Result<()> {
         // Introduce a new scope for our Arc to clone before moving it into the thread.
         // thread::Handle starts the thread immediately so the render thread will usually start first.
         let render_thread = thread::Handle::new(move || {
-            debug!("attempting to start server on {}", LISTENHOST.flag);
+            debug!(listenhost = LISTENHOST.flag, "attempting to start server");
             let server = match tiny_http::Server::http(LISTENHOST.flag) {
                 Ok(server) => server,
                 Err(err) => {
-                    error!("Error starting render thread {}", err);
-                    error!("Shutting down all threads...");
+                    error!(
+                        ?err,
+                        "Error starting render thread. Shutting down all thread.",
+                    );
                     std::process::exit(1);
                 }
             };
-            info!("Listening for metrics request on {}", LISTENHOST.flag);
+            info!(
+                listenthost = LISTENHOST.flag,
+                "Listening for metrics request on"
+            );
             loop {
                 info!("Waiting for request");
                 match server.recv() {
@@ -152,11 +170,11 @@ fn main() -> anyhow::Result<()> {
 
                         let response = tiny_http::Response::from_data(buffer).with_status_code(200);
                         if let Err(e) = req.respond(response) {
-                            error!("Error responding to request {}", e);
+                            error!(err = ?e, "Error responding to request");
                         }
                     }
                     Err(e) => {
-                        info!("Invalid http request! {}", e);
+                        error!(err = ?e, "Invalid http request!");
                     }
                 }
             }
