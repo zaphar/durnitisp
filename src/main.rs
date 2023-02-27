@@ -116,8 +116,11 @@ fn main() -> anyhow::Result<()> {
         &["domain"],
     )
     .unwrap();
-    let ping_latency_vec =
-        GaugeVec::new(Opts::new("ping_latency", "ICMP Ping latency"), &["domain"]).unwrap();
+    let ping_latency_vec = GaugeVec::new(
+        Opts::new("ping_latency", "ICMP Ping latency in milliseconds"),
+        &["domain"],
+    )
+    .unwrap();
     let ping_counter_vec = CounterVec::new(
         Opts::new("ping_counter", "Ping Request Counter"),
         &["result", "domain"],
