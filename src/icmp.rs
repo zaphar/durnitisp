@@ -114,7 +114,7 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                                 "Dropped"
                             );
                             self.ping_counter
-                                .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
+                                .with(&prometheus::labels! {"result" => "dropped", "domain" => domain_name})
                                 .inc();
                             for_delete.push(*k);
                         }
