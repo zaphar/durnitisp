@@ -121,7 +121,7 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                             info!(
                                 domain=domain_name,
                                 %dest,
-                                seq = sequence,
+                                seq = *k,
                                 "Dropped"
                             );
                             increment_counter!(
