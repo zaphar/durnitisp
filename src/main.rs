@@ -15,10 +15,9 @@ use std::convert::Into;
 use std::sync::Arc;
 
 use gflags;
+use metrics_exporter_prometheus;
 use nursery::thread;
 use nursery::{Nursery, Waitable};
-use prometheus::{self, GaugeVec};
-use prometheus::{CounterVec, Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
 use tiny_http;
 use tracing::{debug, error, info, instrument, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -93,49 +92,11 @@ fn main() -> anyhow::Result<()> {
 
     let ping_hosts: Vec<&str> = PINGHOSTS.flag.split(",").collect();
 
+    let builder = metrics_exporter_prometheus::PrometheusBuilder::new();
+    let prom_handle = builder
+        .install_recorder()
+        .expect("Failed to install prometheus exporter");
     // Create a Registry and register metrics.
-    let r = Registry::new();
-    let stun_counter_vec = CounterVec::new(
-        Opts::new(
-            "stun_attempt_counter",
-            "Counter for the good, bad, and total attempts to connect to stun server.",
-        ),
-        &["result", "domain"],
-    )
-    .unwrap();
-    let stun_success_vec = IntGaugeVec::new(
-        Opts::new("stun_success", "Stun probe successes"),
-        &["domain"],
-    )
-    .unwrap();
-    let stun_latency_vec = IntGaugeVec::new(
-        Opts::new(
-            "stun_attempt_latency_ms",
-            "Latency guage in millis per stun domain.",
-        ),
-        &["domain"],
-    )
-    .unwrap();
-    let ping_latency_vec = GaugeVec::new(
-        Opts::new("ping_latency", "ICMP Ping latency in milliseconds"),
-        &["domain"],
-    )
-    .unwrap();
-    let ping_counter_vec = CounterVec::new(
-        Opts::new("ping_counter", "Ping Request Counter"),
-        &["result", "domain"],
-    )
-    .unwrap();
-    r.register(Box::new(stun_counter_vec.clone()))
-        .expect("Failed to register stun connection counter");
-    r.register(Box::new(stun_latency_vec.clone()))
-        .expect("Failed to register stun latency guage");
-    r.register(Box::new(stun_success_vec.clone()))
-        .expect("Failed to register stun success gauge");
-    r.register(Box::new(ping_latency_vec.clone()))
-        .expect("Failed to register ping latency guage");
-    r.register(Box::new(ping_counter_vec.clone()))
-        .expect("Failed to register ping counter");
     let stun_socket_addrs = util::resolve_socket_addrs(&stun_servers).unwrap();
     let stun_servers = Arc::new(stun_servers);
     let ping_hosts = Arc::new(ping_hosts);
@@ -165,13 +126,8 @@ fn main() -> anyhow::Result<()> {
                 info!("Waiting for request");
                 match server.recv() {
                     Ok(req) => {
-                        let mut buffer = vec![];
-                        // Gather the metrics.
-                        let encoder = TextEncoder::new();
-                        let metric_families = r.gather();
-                        encoder.encode(&metric_families, &mut buffer).unwrap();
-
-                        let response = tiny_http::Response::from_data(buffer).with_status_code(200);
+                        let response = tiny_http::Response::from_data(prom_handle.render())
+                            .with_status_code(200);
                         if let Err(e) = req.respond(response) {
                             error!(err = ?e, "Error responding to request");
                         }
@@ -185,27 +141,15 @@ fn main() -> anyhow::Result<()> {
         parent.adopt(Box::new(render_thread));
     }
     {
-        let ping_latency_vec = ping_latency_vec.clone();
-        let ping_counter_vec = ping_counter_vec.clone();
-        icmp::schedule_echo_server(&ping_hosts, ping_latency_vec, ping_counter_vec, &mut parent);
+        icmp::schedule_echo_server(&ping_hosts, &mut parent);
     }
     // Then we attempt to start connections to each stun server.
     for (i, s) in stun_socket_addrs.iter().enumerate() {
         let stun_servers_copy = stun_servers.clone();
-        let stun_counter_vec_copy = stun_counter_vec.clone();
-        let stun_latency_vec_copy = stun_latency_vec.clone();
-        let stun_success_vec_copy = stun_success_vec.clone();
         if let Some(s) = s.clone() {
             let domain_name = *stun_servers_copy.get(i).unwrap();
-            let connect_thread = thread::Pending::new(move || {
-                stun::start_listen_thread(
-                    domain_name,
-                    s.into(),
-                    stun_counter_vec_copy,
-                    stun_latency_vec_copy,
-                    stun_success_vec_copy,
-                )
-            });
+            let connect_thread =
+                thread::Pending::new(move || stun::start_listen_thread(domain_name, s.into()));
             parent.schedule(Box::new(connect_thread));
             // Spread the probe threads out so they're somewhat uniformly distributed.
             std::thread::sleep(std::time::Duration::from_micros(

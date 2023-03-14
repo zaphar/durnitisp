@@ -25,8 +25,8 @@ use icmp_socket::{
     packet::{Icmpv4Message, Icmpv6Message, WithEchoRequest},
     IcmpSocket, IcmpSocket4, IcmpSocket6, Icmpv4Packet, Icmpv6Packet,
 };
+use metrics::{gauge, histogram, increment_counter, Label};
 use nursery::{thread, Nursery};
-use prometheus::{CounterVec, GaugeVec};
 use tracing::{debug, error, info, instrument, warn};
 
 gflags::define! {
@@ -62,11 +62,16 @@ fn resolve_host_address(host: &str) -> String {
 
 struct State<AddrType> {
     destinations: HashMap<u16, (String, AddrType)>, // domain, address
-    // TODO(jwall): This should be a time tracker by both identifier and sequence
     time_tracker: BTreeMap<u16, BTreeMap<u16, Instant>>,
     destination_counter: BTreeMap<u16, u16>,
-    latency_guage: GaugeVec,
-    ping_counter: CounterVec,
+    // TODO(jwall): Add histogram for latency as well.
+}
+
+fn make_ping_count_labels(domain_name: &str, result: &str) -> Vec<Label> {
+    vec![
+        Label::new("domain", domain_name.to_owned()),
+        Label::new("result", result.to_owned()),
+    ]
 }
 
 impl<AddrType: std::fmt::Display> State<AddrType> {
@@ -84,13 +89,18 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                     seq = sequence,
                     "Reply",
                 );
-                self.ping_counter
-                    .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
-                    .inc();
+                increment_counter!("ping_counter", make_ping_count_labels(domain_name, "ok"),);
                 if elapsed as i32 != 0 {
-                    self.latency_guage
-                        .with(&prometheus::labels! {"domain" => domain_name.as_str()})
-                        .set(elapsed);
+                    gauge!(
+                        "ping_latency",
+                        elapsed,
+                        vec![Label::new("domain", domain_name.to_owned()),],
+                    );
+                    histogram!(
+                        "ping_latency_hist_ms",
+                        elapsed,
+                        vec![Label::new("domain", domain_name.to_owned()),],
+                    );
                 }
                 self.time_tracker
                     .get_mut(&identifier)
@@ -114,9 +124,10 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                                 seq = sequence,
                                 "Dropped"
                             );
-                            self.ping_counter
-                                .with(&prometheus::labels! {"result" => "dropped", "domain" => domain_name})
-                                .inc();
+                            increment_counter!(
+                                "ping_counter",
+                                make_ping_count_labels(domain_name, "dropped"),
+                            );
                             for_delete.push(*k);
                         }
                     }
@@ -175,9 +186,10 @@ impl<'a> PacketHandler<Icmpv6Packet, Ipv6Addr> for &'a mut State<Ipv6Addr> {
                             },
                     }) => {
                         if let Some((domain_name, _addr)) = self.destinations.get(&identifier) {
-                            self.ping_counter
-                                .with(&prometheus::labels! {"result" => "unreachable", "domain" => domain_name})
-                                .inc();
+                            increment_counter!(
+                                "ping_counter",
+                                make_ping_count_labels(domain_name, "unreachable")
+                            );
                             return true;
                         }
                     }
@@ -201,17 +213,12 @@ impl<'a> PacketHandler<Icmpv6Packet, Ipv6Addr> for &'a mut State<Ipv6Addr> {
                         checksum: _,
                         message:
                             Icmpv6Message::EchoRequest {
-                                identifier,
+                                identifier: _,
                                 sequence: _,
                                 payload: _,
                             },
                     }) => {
-                        if let Some((domain_name, _addr)) = self.destinations.get(&identifier) {
-                            self.ping_counter
-                                    .with(&prometheus::labels! {"result" => "parameter_problem", "domain" => domain_name})
-                                    .inc();
-                            return true;
-                        }
+                        // TODO log but otherwise ignore this.
                     }
                     Err(e) => {
                         // We ignore these as well but log it.
@@ -292,10 +299,7 @@ where
         );
         match self.send_to_destination(dest, identifier, sequence) {
             Err(e) => {
-                state
-                    .ping_counter
-                    .with(&prometheus::labels! {"result" => "err", "type" => "send"})
-                    .inc();
+                increment_counter!("ping_counter", make_ping_count_labels(domain_name, "err"),);
                 error!(
                     domain=domain_name, %dest, err=?e,
                     "Error sending. Trying again later",
@@ -388,11 +392,7 @@ where
                 }
                 Err(e) => {
                     error!(err = ?e, "Error receiving packet");
-                    handler
-                        .get_mut_state()
-                        .ping_counter
-                        .with(&prometheus::labels! {"result" => "err", "domain" => "unknown"})
-                        .inc();
+                    increment_counter!("ping_counter", make_ping_count_labels("unknown", "err"),);
                     return;
                 }
             }
@@ -428,12 +428,7 @@ impl Multi {
 }
 
 #[instrument(name = "ICMP", skip_all)]
-pub fn schedule_echo_server(
-    domain_names: &Vec<&str>,
-    ping_latency_guage: GaugeVec,
-    ping_counter: CounterVec,
-    parent: &mut Nursery,
-) {
+pub fn schedule_echo_server(domain_names: &Vec<&str>, parent: &mut Nursery) {
     let resolved: Vec<(String, IpAddr)> = domain_names
         .iter()
         .map(|domain_name| {
@@ -472,8 +467,6 @@ pub fn schedule_echo_server(
         destinations: v4_destinations,
         time_tracker: BTreeMap::new(),
         destination_counter: BTreeMap::new(),
-        latency_guage: ping_latency_guage.clone(),
-        ping_counter: ping_counter.clone(),
     };
     let mut v6_destinations = HashMap::new();
     let mut v6_id_counter = 42;
@@ -493,8 +486,6 @@ pub fn schedule_echo_server(
         destinations: v6_destinations,
         time_tracker: BTreeMap::new(),
         destination_counter: BTreeMap::new(),
-        latency_guage: ping_latency_guage,
-        ping_counter,
     };
     let v6_pinger = PingerImpl {
         sock: IcmpSocket6::new().expect("Failed to open Icmpv6 Socket"),

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use gflags;
-use prometheus::{CounterVec, IntGaugeVec};
+use metrics::{gauge, increment_counter, Label};
 use std::convert::From;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -70,18 +70,18 @@ fn attempt_stun_connect(addr: SocketAddr) -> Result<SystemTime, ConnectError> {
     Ok(SystemTime::now())
 }
 
+fn make_count_labels(domain_name: &str, result: &str) -> Vec<Label> {
+    vec![
+        Label::new("domain", domain_name.to_owned()),
+        Label::new("result", result.to_owned()),
+    ]
+}
+
 #[instrument(
     name = "STUN",
     fields(domain=domain_name, socket=%s),
-    skip(stun_counter_vec_copy, stun_latency_vec_copy, stun_success_vec_copy)
 )]
-pub fn start_listen_thread(
-    domain_name: &str,
-    s: SocketAddr,
-    stun_counter_vec_copy: CounterVec,
-    stun_latency_vec_copy: IntGaugeVec,
-    stun_success_vec_copy: IntGaugeVec,
-) {
+pub fn start_listen_thread(domain_name: &str, s: SocketAddr) {
     debug!("starting thread");
     loop {
         let now = SystemTime::now();
@@ -94,16 +94,17 @@ pub fn start_listen_thread(
                     millis = finish_time.duration_since(now).unwrap().as_millis(),
                     conn_type = "Stun connection",
                 );
-                stun_counter_vec_copy
-                    .with(&prometheus::labels! {"result" => "ok", "domain" => domain_name})
-                    .inc();
-                stun_latency_vec_copy
-                    .with(&prometheus::labels! {"domain" => domain_name})
-                    // Technically this could be lossy but we'll chance it anyway.
-                    .set(finish_time.duration_since(now).unwrap().as_millis() as i64);
-                stun_success_vec_copy
-                    .with(&prometheus::labels! {"domain" => domain_name})
-                    .set(1);
+                increment_counter!("stun_attempt_counter", make_count_labels(domain_name, "ok"));
+                gauge!(
+                    "stun_attempt_latency_ms",
+                    finish_time.duration_since(now).unwrap().as_millis() as f64,
+                    vec![Label::new("domain", domain_name.to_owned())]
+                );
+                gauge!(
+                    "stun_success",
+                    1 as f64,
+                    vec![Label::new("domain", domain_name.to_owned())]
+                );
             }
             Err(ConnectError::Timeout(finish_time)) => {
                 info!(
@@ -112,24 +113,30 @@ pub fn start_listen_thread(
                     millis = finish_time.duration_since(now).unwrap().as_millis(),
                     conn_type = "Stun connection",
                 );
-                stun_counter_vec_copy
-                    .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
-                    .inc();
-                stun_success_vec_copy
-                    .with(&prometheus::labels! {"domain" => domain_name})
-                    .set(0);
+                increment_counter!(
+                    "stun_attempt_counter",
+                    make_count_labels(domain_name, "timeout")
+                );
+                gauge!(
+                    "stun_success",
+                    0 as f64,
+                    vec![Label::new("domain", domain_name.to_owned())]
+                );
             }
             Err(ConnectError::Err(e)) => {
                 error!(
                     timeout=true, success=false, err = ?e,
                     conn_type="Stun connection",
                 );
-                stun_counter_vec_copy
-                    .with(&prometheus::labels! {"result" => "err", "domain" => domain_name})
-                    .inc();
-                stun_success_vec_copy
-                    .with(&prometheus::labels! {"domain" => domain_name})
-                    .set(0);
+                increment_counter!(
+                    "stun_attempt_counter",
+                    make_count_labels(domain_name, "err")
+                );
+                gauge!(
+                    "stun_success",
+                    0 as f64,
+                    vec![Label::new("domain", domain_name.to_owned())]
+                );
             }
             Err(ConnectError::Incomplete) => {
                 error!(
@@ -138,12 +145,15 @@ pub fn start_listen_thread(
                     err = "Incomplete",
                     conn_type = "Stun connection",
                 );
-                stun_counter_vec_copy
-                    .with(&prometheus::labels! {"result" => "incomplete", "domain" => domain_name})
-                    .inc();
-                stun_success_vec_copy
-                    .with(&prometheus::labels! {"domain" => domain_name})
-                    .set(0);
+                increment_counter!(
+                    "stun_attempt_counter",
+                    make_count_labels(domain_name, "incomplete")
+                );
+                gauge!(
+                    "stun_success",
+                    0 as f64,
+                    vec![Label::new("domain", domain_name.to_owned())]
+                );
             }
         }
 
