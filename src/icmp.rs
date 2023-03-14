@@ -73,6 +73,7 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
     fn handle_echo_reply(&mut self, identifier: u16, sequence: u16) -> bool {
         if let Some((domain_name, dest)) = self.destinations.get(&identifier) {
             let time_tracker = self.time_tracker.get_mut(&identifier);
+            let mut result = false;
             if let Some(Some(send_time)) = time_tracker.as_ref().map(|m| m.get(&sequence)) {
                 let elapsed = Instant::now().sub(send_time.clone()).as_micros() as f64 / 1000.00;
                 // We make a copy here to avoid the borrow above sticking around for too long.
@@ -94,7 +95,7 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                 self.time_tracker
                     .get_mut(&identifier)
                     .and_then(|m| m.remove(&sequence));
-                return true;
+                result = true;
             } else {
                 error!(sequence, "Discarding unexpected sequence",);
             };
@@ -114,7 +115,7 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                                 "Dropped"
                             );
                             self.ping_counter
-                                .with(&prometheus::labels! {"result" => "timeout", "domain" => domain_name})
+                                .with(&prometheus::labels! {"result" => "dropped", "domain" => domain_name})
                                 .inc();
                             for_delete.push(*k);
                         }
@@ -127,6 +128,7 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                     .get_mut(&identifier)
                     .and_then(|m| m.remove(&k));
             }
+            return result;
         } else {
             warn!(identifier, "Discarding wrong identifier");
         }
