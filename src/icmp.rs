@@ -25,7 +25,7 @@ use icmp_socket::{
     packet::{Icmpv4Message, Icmpv6Message, WithEchoRequest},
     IcmpSocket, IcmpSocket4, IcmpSocket6, Icmpv4Packet, Icmpv6Packet,
 };
-use metrics::{gauge, histogram, increment_counter, Label};
+use metrics::{counter, gauge, histogram};
 use nursery::{thread, Nursery};
 use tracing::{debug, error, info, instrument, warn};
 
@@ -67,10 +67,10 @@ struct State<AddrType> {
     // TODO(jwall): Add histogram for latency as well.
 }
 
-fn make_ping_count_labels(domain_name: &str, result: &str) -> Vec<Label> {
-    vec![
-        Label::new("domain", domain_name.to_owned()),
-        Label::new("result", result.to_owned()),
+fn make_ping_count_labels(domain_name: &str, result: &str) -> [(&'static str, String); 2] {
+    [
+        ("domain", domain_name.to_owned()),
+        ("result", result.to_owned()),
     ]
 }
 
@@ -89,18 +89,13 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                     seq = sequence,
                     "Reply",
                 );
-                increment_counter!("ping_counter", make_ping_count_labels(domain_name, "ok"),);
+                counter!("ping_counter", &make_ping_count_labels(domain_name, "ok")).increment(1);
                 if elapsed as i32 != 0 {
-                    gauge!(
-                        "ping_latency",
-                        elapsed,
-                        vec![Label::new("domain", domain_name.to_owned()),],
-                    );
-                    histogram!(
-                        "ping_latency_hist_ms",
-                        elapsed,
-                        vec![Label::new("domain", domain_name.to_owned()),],
-                    );
+                    let labels = [("domain", domain_name.to_owned())];
+                    let latency = gauge!("ping_latency", &labels);
+                    latency.increment(elapsed);
+                    let latency_hist = histogram!("ping_latency_hist_ms", &labels);
+                    latency_hist.record(elapsed);
                 }
                 self.time_tracker
                     .get_mut(&identifier)
@@ -124,10 +119,11 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                                 seq = sequence,
                                 "Dropped"
                             );
-                            increment_counter!(
+                            counter!(
                                 "ping_counter",
-                                make_ping_count_labels(domain_name, "dropped"),
-                            );
+                                &make_ping_count_labels(domain_name, "dropped")
+                            )
+                            .increment(1);
                             for_delete.push(*k);
                         }
                     }
@@ -186,10 +182,11 @@ impl<'a> PacketHandler<Icmpv6Packet, Ipv6Addr> for &'a mut State<Ipv6Addr> {
                             },
                     }) => {
                         if let Some((domain_name, _addr)) = self.destinations.get(&identifier) {
-                            increment_counter!(
+                            counter!(
                                 "ping_counter",
-                                make_ping_count_labels(domain_name, "unreachable")
-                            );
+                                &make_ping_count_labels(domain_name, "unreachable")
+                            )
+                            .increment(1);
                             return true;
                         }
                     }
@@ -299,7 +296,7 @@ where
         );
         match self.send_to_destination(dest, identifier, sequence) {
             Err(e) => {
-                increment_counter!("ping_counter", make_ping_count_labels(domain_name, "err"),);
+                counter!("ping_counter", &make_ping_count_labels(domain_name, "err")).increment(1);
                 error!(
                     domain=domain_name, %dest, err=?e,
                     "Error sending. Trying again later",
@@ -392,7 +389,8 @@ where
                 }
                 Err(e) => {
                     error!(err = ?e, "Error receiving packet");
-                    increment_counter!("ping_counter", make_ping_count_labels("unknown", "err"),);
+                    counter!("ping_counter", &make_ping_count_labels("unknown", "err"))
+                        .increment(1);
                     return;
                 }
             }
