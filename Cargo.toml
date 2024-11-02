@@ -13,7 +13,7 @@ anyhow = "1"
 gflags = "^0.3"
 nursery = "^0.0.1"
 metrics = "0.24.0"
-metrics-exporter-prometheus = "0.16.0"
+metrics-exporter-prometheus = {version = "0.16.0", default-features = false}
 tiny_http = "0.12.0"
 socket2 = "0.5.1"
 icmp-socket = "0.2.0"
