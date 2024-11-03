@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use gflags;
-use metrics::{gauge, increment_counter, Label};
+use metrics::{counter, gauge};
 use std::convert::From;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -70,10 +70,10 @@ fn attempt_stun_connect(addr: SocketAddr) -> Result<SystemTime, ConnectError> {
     Ok(SystemTime::now())
 }
 
-fn make_count_labels(domain_name: &str, result: &str) -> Vec<Label> {
-    vec![
-        Label::new("domain", domain_name.to_owned()),
-        Label::new("result", result.to_owned()),
+fn make_count_labels(domain_name: &str, result: &str) -> [(&'static str, String); 2] {
+    [
+        ("domain", domain_name.to_owned()),
+        ("result", result.to_owned()),
     ]
 }
 
@@ -82,6 +82,9 @@ fn make_count_labels(domain_name: &str, result: &str) -> Vec<Label> {
     fields(domain=domain_name, socket=%s),
 )]
 pub fn start_listen_thread(domain_name: &str, s: SocketAddr) {
+    let labels: [(&str, String); 1] = [("domain", domain_name.to_owned())];
+    let success = gauge!("stun_success", &labels);
+
     debug!("starting thread");
     loop {
         let now = SystemTime::now();
@@ -94,17 +97,14 @@ pub fn start_listen_thread(domain_name: &str, s: SocketAddr) {
                     millis = finish_time.duration_since(now).unwrap().as_millis(),
                     conn_type = "Stun connection",
                 );
-                increment_counter!("stun_attempt_counter", make_count_labels(domain_name, "ok"));
-                gauge!(
-                    "stun_attempt_latency_ms",
-                    finish_time.duration_since(now).unwrap().as_millis() as f64,
-                    vec![Label::new("domain", domain_name.to_owned())]
-                );
-                gauge!(
-                    "stun_success",
-                    1 as f64,
-                    vec![Label::new("domain", domain_name.to_owned())]
-                );
+                counter!(
+                    "stun_attempt_counter",
+                    &make_count_labels(domain_name, "ok")
+                )
+                .increment(1);
+                gauge!("stun_attempt_latency_ms", &labels)
+                    .increment(finish_time.duration_since(now).unwrap().as_millis() as f64);
+                success.set(1);
             }
             Err(ConnectError::Timeout(finish_time)) => {
                 info!(
@@ -113,30 +113,24 @@ pub fn start_listen_thread(domain_name: &str, s: SocketAddr) {
                     millis = finish_time.duration_since(now).unwrap().as_millis(),
                     conn_type = "Stun connection",
                 );
-                increment_counter!(
+                counter!(
                     "stun_attempt_counter",
-                    make_count_labels(domain_name, "timeout")
-                );
-                gauge!(
-                    "stun_success",
-                    0 as f64,
-                    vec![Label::new("domain", domain_name.to_owned())]
-                );
+                    &make_count_labels(domain_name, "timeout")
+                )
+                .increment(1);
+                success.set(0);
             }
             Err(ConnectError::Err(e)) => {
                 error!(
                     timeout=true, success=false, err = ?e,
                     conn_type="Stun connection",
                 );
-                increment_counter!(
+                counter!(
                     "stun_attempt_counter",
-                    make_count_labels(domain_name, "err")
-                );
-                gauge!(
-                    "stun_success",
-                    0 as f64,
-                    vec![Label::new("domain", domain_name.to_owned())]
-                );
+                    &make_count_labels(domain_name, "err")
+                )
+                .increment(1);
+                success.set(0);
             }
             Err(ConnectError::Incomplete) => {
                 error!(
@@ -145,15 +139,12 @@ pub fn start_listen_thread(domain_name: &str, s: SocketAddr) {
                     err = "Incomplete",
                     conn_type = "Stun connection",
                 );
-                increment_counter!(
+                counter!(
                     "stun_attempt_counter",
-                    make_count_labels(domain_name, "incomplete")
-                );
-                gauge!(
-                    "stun_success",
-                    0 as f64,
-                    vec![Label::new("domain", domain_name.to_owned())]
-                );
+                    &make_count_labels(domain_name, "incomplete")
+                )
+                .increment(1);
+                success.set(0);
             }
         }
 
