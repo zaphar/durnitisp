@@ -13,6 +13,8 @@
 // limitations under the License.
 use std::convert::Into;
 use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 
 use gflags;
 use metrics_exporter_prometheus;
@@ -104,6 +106,11 @@ fn main() -> anyhow::Result<()> {
     let mut parent = Nursery::new();
     // First we start the render thread.
     {
+        let prom_maint_handle = prom_handle.clone();
+        let maint_thread = thread::Handle::new(move || {
+            sleep(Duration::from_secs(5));
+            prom_maint_handle.run_upkeep();
+        });
         // Introduce a new scope for our Arc to clone before moving it into the thread.
         // thread::Handle starts the thread immediately so the render thread will usually start first.
         let render_thread = thread::Handle::new(move || {
@@ -119,7 +126,7 @@ fn main() -> anyhow::Result<()> {
                 }
             };
             info!(
-                listenthost = LISTENHOST.flag,
+                listenhost = LISTENHOST.flag,
                 "Listening for metrics request on"
             );
             loop {
@@ -127,6 +134,7 @@ fn main() -> anyhow::Result<()> {
                 match server.recv() {
                     Ok(req) => {
                         let response = tiny_http::Response::from_data(prom_handle.render())
+                            .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/plain"[..]).unwrap())
                             .with_status_code(200);
                         if let Err(e) = req.respond(response) {
                             error!(err = ?e, "Error responding to request");
@@ -139,6 +147,7 @@ fn main() -> anyhow::Result<()> {
             }
         });
         parent.adopt(Box::new(render_thread));
+        parent.adopt(Box::new(maint_thread));
     }
     {
         icmp::schedule_echo_server(&ping_hosts, &mut parent);

@@ -25,7 +25,7 @@ use icmp_socket::{
     packet::{Icmpv4Message, Icmpv6Message, WithEchoRequest},
     IcmpSocket, IcmpSocket4, IcmpSocket6, Icmpv4Packet, Icmpv6Packet,
 };
-use metrics::{gauge, histogram, increment_counter, Label};
+use metrics::{counter, gauge, histogram, Label};
 use nursery::{thread, Nursery};
 use tracing::{debug, error, info, instrument, warn};
 
@@ -89,18 +89,20 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                     seq = sequence,
                     "Reply",
                 );
-                increment_counter!("ping_counter", make_ping_count_labels(domain_name, "ok"),);
+                let ping_counter = counter!("ping_counter", make_ping_count_labels(domain_name, "ok"),);
+                ping_counter.increment(1);
                 if elapsed as i32 != 0 {
-                    gauge!(
+                    let ping_latency = gauge!(
                         "ping_latency",
-                        elapsed,
                         vec![Label::new("domain", domain_name.to_owned()),],
                     );
-                    histogram!(
+                    ping_latency.set(elapsed);
+
+                    let ping_latency_hist_ms = histogram!(
                         "ping_latency_hist_ms",
-                        elapsed,
                         vec![Label::new("domain", domain_name.to_owned()),],
                     );
+                    ping_latency_hist_ms.record(elapsed);
                 }
                 self.time_tracker
                     .get_mut(&identifier)
@@ -124,7 +126,7 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                                 seq = *k,
                                 "Dropped"
                             );
-                            increment_counter!(
+                            counter!(
                                 "ping_counter",
                                 make_ping_count_labels(domain_name, "dropped"),
                             );
@@ -186,7 +188,7 @@ impl<'a> PacketHandler<Icmpv6Packet, Ipv6Addr> for &'a mut State<Ipv6Addr> {
                             },
                     }) => {
                         if let Some((domain_name, _addr)) = self.destinations.get(&identifier) {
-                            increment_counter!(
+                            counter!(
                                 "ping_counter",
                                 make_ping_count_labels(domain_name, "unreachable")
                             );
@@ -299,7 +301,7 @@ where
         );
         match self.send_to_destination(dest, identifier, sequence) {
             Err(e) => {
-                increment_counter!("ping_counter", make_ping_count_labels(domain_name, "err"),);
+                counter!("ping_counter", make_ping_count_labels(domain_name, "err"),);
                 error!(
                     domain=domain_name, %dest, err=?e,
                     "Error sending. Trying again later",
@@ -392,7 +394,7 @@ where
                 }
                 Err(e) => {
                     error!(err = ?e, "Error receiving packet");
-                    increment_counter!("ping_counter", make_ping_count_labels("unknown", "err"),);
+                    counter!("ping_counter", make_ping_count_labels("unknown", "err"),);
                     return;
                 }
             }

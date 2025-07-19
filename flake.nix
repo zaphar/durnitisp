@@ -16,7 +16,7 @@
             in
             {
                 defaultPackage = naersk-lib.buildPackage rec {
-                    pname = "kitchen";
+                    pname = "durnitisp";
                     src = ./.;
                 };
             }

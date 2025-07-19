@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use gflags;
-use metrics::{gauge, increment_counter, Label};
+use metrics::{counter, gauge, Label};
 use std::convert::From;
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
@@ -83,6 +83,16 @@ fn make_count_labels(domain_name: &str, result: &str) -> Vec<Label> {
 )]
 pub fn start_listen_thread(domain_name: &str, s: SocketAddr) {
     debug!("starting thread");
+    let stun_attempt_counter =
+        counter!("stun_attempt_counter", make_count_labels(domain_name, "ok"));
+    let stun_attempt_latency_ms = gauge!(
+        "stun_attempt_latency_ms",
+        vec![Label::new("domain", domain_name.to_owned())]
+    );
+    let stun_success = gauge!(
+        "stun_success",
+        vec![Label::new("domain", domain_name.to_owned())]
+    );
     loop {
         let now = SystemTime::now();
         info!("Attempting to connect");
@@ -94,17 +104,10 @@ pub fn start_listen_thread(domain_name: &str, s: SocketAddr) {
                     millis = finish_time.duration_since(now).unwrap().as_millis(),
                     conn_type = "Stun connection",
                 );
-                increment_counter!("stun_attempt_counter", make_count_labels(domain_name, "ok"));
-                gauge!(
-                    "stun_attempt_latency_ms",
-                    finish_time.duration_since(now).unwrap().as_millis() as f64,
-                    vec![Label::new("domain", domain_name.to_owned())]
-                );
-                gauge!(
-                    "stun_success",
-                    1 as f64,
-                    vec![Label::new("domain", domain_name.to_owned())]
-                );
+                stun_attempt_counter.increment(1);
+                stun_attempt_latency_ms
+                    .set(finish_time.duration_since(now).unwrap().as_millis() as f64);
+                stun_success.set(1 as f64);
             }
             Err(ConnectError::Timeout(finish_time)) => {
                 info!(
@@ -113,30 +116,16 @@ pub fn start_listen_thread(domain_name: &str, s: SocketAddr) {
                     millis = finish_time.duration_since(now).unwrap().as_millis(),
                     conn_type = "Stun connection",
                 );
-                increment_counter!(
-                    "stun_attempt_counter",
-                    make_count_labels(domain_name, "timeout")
-                );
-                gauge!(
-                    "stun_success",
-                    0 as f64,
-                    vec![Label::new("domain", domain_name.to_owned())]
-                );
+                stun_attempt_counter.increment(1);
+                stun_success.set(0 as f64);
             }
             Err(ConnectError::Err(e)) => {
                 error!(
                     timeout=true, success=false, err = ?e,
                     conn_type="Stun connection",
                 );
-                increment_counter!(
-                    "stun_attempt_counter",
-                    make_count_labels(domain_name, "err")
-                );
-                gauge!(
-                    "stun_success",
-                    0 as f64,
-                    vec![Label::new("domain", domain_name.to_owned())]
-                );
+                stun_attempt_counter.increment(1);
+                stun_success.set(0 as f64);
             }
             Err(ConnectError::Incomplete) => {
                 error!(
@@ -145,15 +134,8 @@ pub fn start_listen_thread(domain_name: &str, s: SocketAddr) {
                     err = "Incomplete",
                     conn_type = "Stun connection",
                 );
-                increment_counter!(
-                    "stun_attempt_counter",
-                    make_count_labels(domain_name, "incomplete")
-                );
-                gauge!(
-                    "stun_success",
-                    0 as f64,
-                    vec![Label::new("domain", domain_name.to_owned())]
-                );
+                stun_attempt_counter.increment(1);
+                stun_success.set(0 as f64);
             }
         }
 
