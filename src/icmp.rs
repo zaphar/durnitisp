@@ -129,7 +129,7 @@ impl<AddrType: std::fmt::Display> State<AddrType> {
                             counter!(
                                 "ping_counter",
                                 make_ping_count_labels(domain_name, "dropped"),
-                            );
+                            ).increment(1);
                             for_delete.push(*k);
                         }
                     }
@@ -191,7 +191,7 @@ impl<'a> PacketHandler<Icmpv6Packet, Ipv6Addr> for &'a mut State<Ipv6Addr> {
                             counter!(
                                 "ping_counter",
                                 make_ping_count_labels(domain_name, "unreachable")
-                            );
+                            ).increment(1);
                             return true;
                         }
                     }
@@ -301,7 +301,7 @@ where
         );
         match self.send_to_destination(dest, identifier, sequence) {
             Err(e) => {
-                counter!("ping_counter", make_ping_count_labels(domain_name, "err"),);
+                counter!("ping_counter", make_ping_count_labels(domain_name, "err"),).increment(1);
                 error!(
                     domain=domain_name, %dest, err=?e,
                     "Error sending. Trying again later",
@@ -394,7 +394,7 @@ where
                 }
                 Err(e) => {
                     error!(err = ?e, "Error receiving packet");
-                    counter!("ping_counter", make_ping_count_labels("unknown", "err"),);
+                    counter!("ping_counter", make_ping_count_labels("unknown", "err"),).increment(1);
                     return;
                 }
             }
