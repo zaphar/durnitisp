@@ -9,13 +9,13 @@
         flake-compat = { url = "github:edolstra/flake-compat"; flake = false; };
     };
 
-    outputs = {self, flake-utils, naersk, flake-compat, nixpkgs}:
+    outputs = {self, flake-utils, naersk, ...}:
         flake-utils.lib.eachDefaultSystem (system:
             let
                 naersk-lib = naersk.lib."${system}";
             in
             {
-                defaultPackage = naersk-lib.buildPackage rec {
+                defaultPackage = naersk-lib.buildPackage {
                     pname = "durnitisp";
                     src = ./.;
                 };
